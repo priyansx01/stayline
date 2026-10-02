@@ -9,7 +9,9 @@ use crate::error::{Error, Result};
 use crate::gateway::Gateway;
 use crate::tls::{self, Fingerprint};
 
-const USER_AGENT: &str = concat!("stayline/", env!("CARGO_PKG_VERSION"));
+/// FortiGates drop `/remote/logincheck` requests from unknown user agents
+/// without a reply; this is the one openfortivpn uses.
+const USER_AGENT: &str = "Mozilla/5.0 SV1";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// HTTP side of the FortiGate SSL-VPN protocol: login, token code, tunnel
