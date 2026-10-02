@@ -66,6 +66,26 @@ cargo run -p stayline-probe -- tunnel vpn.example.com:10443 --user alice [--pin 
 
 This creates a `stayline` network adapter, sets its address, routes and DNS, and stays connected until Ctrl+C. If the connection drops (Wi-Fi off, network switch, sleep) it keeps the adapter and routes, logs in again with the password it was given and backs off 1 s, 2 s, 4 s … up to 60 s, retrying at once when Windows reports a network change. It stops retrying only for problems the user must fix, such as a rejected password. Run with `RUST_LOG=stayline_core=debug` to see PPP negotiation.
 
+## Running as a service with the tray app
+
+Until the installer exists, set it up by hand. From an **elevated** prompt, copy the service next to `wintun.dll` and register it (auto start, LocalSystem, restarts on failure):
+
+```
+mkdir "C:\Program Files\stayline"
+copy target\debug\stayline-svc.exe "C:\Program Files\stayline\"
+copy target\debug\wintun.dll "C:\Program Files\stayline\"
+"C:\Program Files\stayline\stayline-svc.exe" install
+```
+
+Then, as your normal user, save the login (the password is encrypted with DPAPI for your Windows account) and start the tray app:
+
+```
+target\debug\stayline-probe.exe save-login vpn.example.com:10443 --user alice [--pin <sha256>]
+target\debug\stayline-tray.exe
+```
+
+The tray connects automatically when a password is saved and `auto_connect` is on in `%APPDATA%\stayline\config\settings.toml`. Its icon shows grey (off), amber (connecting or reconnecting), green (connected) or red (needs you, or the service is not running). Quitting or killing the tray leaves the tunnel up. Logs: `%ProgramData%\stayline\logs` (service) and `%LOCALAPPDATA%\stayline\data\logs` (tray). `stayline-svc run` runs the service in a console for debugging; `stayline-svc uninstall` removes it.
+
 Known limitation: with split tunnelling, the tunnel's DNS servers get the lowest interface metric, so Windows asks them first for all names, not only the split-DNS domains.
 
 ## Status
@@ -74,6 +94,6 @@ Known limitation: with split tunnelling, the tunnel's DNS servers get the lowest
 - [x] Login probe
 - [x] Tunnel up (tested against a FortiGate with split tunnelling)
 - [x] Reconnect engine (network-change and echo based; sleep/resume events come with the service)
-- [ ] Service + tray split
+- [x] Service + tray split
 - [ ] Login and settings window
 - [ ] MSI package
