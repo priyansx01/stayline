@@ -16,6 +16,7 @@ edition = "2024"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/priyansx01/stayline"
+publish = false
 
 [workspace.dependencies]
 stayline-config = { path = "crates/config" }
@@ -29,7 +30,6 @@ muda = "0.21.0"
 slint = "1.18.1"
 slint-build = "1.18.1"
 tauri-winrt-notification = "0.8.1"
-auto-launch = "0.6.0"
 
 # Async, TLS, HTTP
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }

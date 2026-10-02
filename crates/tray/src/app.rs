@@ -23,7 +23,7 @@ use zeroize::Zeroizing;
 
 use crate::client::{self, FromService};
 use crate::icons::{self, Light};
-use crate::{autostart, format, instance};
+use crate::{format, instance};
 
 slint::include_modules!();
 
@@ -31,6 +31,12 @@ const TAB_STATUS: i32 = 0;
 const TAB_CONNECTIONS: i32 = 1;
 const SERVICE_WARNING_DELAY: Duration = Duration::from_secs(5);
 const NEW_CONNECTION_NAME: &str = "New connection";
+/// Passed by the sign-in entry the installer creates: start quietly in the
+/// tray instead of opening the window.
+const BACKGROUND_ARG: &str = "--background";
+/// App ID of the Start-menu shortcut the installer creates; notifications
+/// shown under it say "stayline".
+const APP_ID: &str = "Stayline.App";
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -58,7 +64,19 @@ fn post(f: impl FnOnce(&mut App) + Send + 'static) {
 
 pub fn main() {
     let _log = init_logging();
-    let background = std::env::args().any(|a| a == autostart::BACKGROUND_ARG);
+    let background = std::env::args().any(|a| a == BACKGROUND_ARG);
+    if background && !load_config().user.start_at_login {
+        // The user turned off starting at sign-in.
+        return;
+    }
+    if installed() {
+        // SAFETY: plain Win32 call with a static string.
+        let _ = unsafe {
+            windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(windows::core::w!(
+                "Stayline.App"
+            ))
+        };
+    }
 
     let Some(show_requests) = instance::claim() else {
         // Already running: the other instance opens its window.
@@ -648,15 +666,9 @@ impl App {
         let Some(w) = &self.window else { return };
         let mut config = load_config();
         config.user.auto_connect = w.get_auto_connect();
+        config.user.start_at_login = w.get_start_at_login();
         if let Err(e) = config.user.save() {
             toast(&e.to_string());
-        }
-        let want = w.get_start_at_login();
-        if want != autostart::is_enabled()
-            && let Err(e) = autostart::set(want)
-        {
-            toast(&e);
-            w.set_start_at_login(autostart::is_enabled());
         }
     }
 
@@ -702,7 +714,7 @@ impl App {
         w.set_version(env!("CARGO_PKG_VERSION").into());
         let config = load_config();
         w.set_auto_connect(config.user.auto_connect);
-        w.set_start_at_login(autostart::is_enabled());
+        w.set_start_at_login(config.user.start_at_login);
 
         w.on_connect(|| with_app(|app| app.connect()));
         w.on_disconnect(|| with_app(|app| app.disconnect()));
@@ -958,13 +970,22 @@ fn capitalise(text: &str) -> String {
 
 fn toast(text: &str) {
     tracing::info!(text, "notification");
-    if let Err(e) = Toast::new(Toast::POWERSHELL_APP_ID)
-        .title("stayline")
-        .text1(text)
-        .show()
-    {
+    let app_id = if installed() {
+        APP_ID
+    } else {
+        Toast::POWERSHELL_APP_ID
+    };
+    if let Err(e) = Toast::new(app_id).title("stayline").text1(text).show() {
         tracing::warn!(error = %e, "could not show notification");
     }
+}
+
+/// Running from an installed copy (which has the Start-menu shortcut that
+/// registers the notification app ID), not from a build folder.
+fn installed() -> bool {
+    let exe = std::env::current_exe().ok();
+    let program_files = std::env::var_os("ProgramFiles").map(std::path::PathBuf::from);
+    matches!((exe, program_files), (Some(exe), Some(pf)) if exe.starts_with(&pf))
 }
 
 /// Opens the service's log folder (the tray's own logs sit in the user's

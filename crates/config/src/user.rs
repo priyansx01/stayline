@@ -14,6 +14,9 @@ pub const LEGACY_NAME: &str = "VPN";
 pub struct UserSettings {
     /// Connect when the app starts (at sign-in), if a password is saved.
     pub auto_connect: bool,
+    /// Start the app at Windows sign-in. The installer registers the app for
+    /// every user; it exits right away for users who turned this off.
+    pub start_at_login: bool,
     /// Name of the connection Connect uses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active: Option<String>,
@@ -38,6 +41,7 @@ impl Default for UserSettings {
     fn default() -> Self {
         Self {
             auto_connect: true,
+            start_at_login: true,
             active: None,
             connections: Vec::new(),
             gateway: String::new(),
@@ -138,6 +142,7 @@ mod tests {
     fn empty_file_gives_defaults() {
         let s: UserSettings = toml::from_str("").unwrap();
         assert!(s.auto_connect);
+        assert!(s.start_at_login);
         assert!(s.connections.is_empty());
     }
 }

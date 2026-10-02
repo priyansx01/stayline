@@ -3,8 +3,6 @@
 #[cfg(windows)]
 mod app;
 #[cfg(windows)]
-mod autostart;
-#[cfg(windows)]
 mod client;
 #[cfg(windows)]
 mod format;
