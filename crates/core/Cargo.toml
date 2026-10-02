@@ -9,3 +9,14 @@ repository.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
+reqwest.workspace = true
+quick-xml.workspace = true
+url.workspace = true
+sha2.workspace = true
+hex.workspace = true
+tracing.workspace = true
+zeroize.workspace = true

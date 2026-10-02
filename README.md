@@ -41,10 +41,22 @@ cargo test --workspace
 
 `wintun.dll` (from wintun.net) must sit next to `stayline-svc.exe` / `stayline-probe.exe` at runtime.
 
+## Checking a gateway
+
+```
+# Show the gateway certificate fingerprint (to pin a self-signed certificate)
+cargo run -p stayline-probe -- cert vpn.example.com:10443
+
+# Log in and print the assigned IP, routes, DNS and session timeouts
+cargo run -p stayline-probe -- login vpn.example.com:10443 --user alice [--pin <sha256>]
+```
+
+The password is prompted for (or read from `STAYLINE_PASSWORD`). If the gateway asks for a token code, the probe asks for it too. The output shows whether the gateway offers PPP tunnel mode and how long a session can be reused, which decides how far silent reconnects can go.
+
 ## Status
 
 - [x] Workspace scaffold
-- [ ] Login probe
+- [x] Login probe
 - [ ] Tunnel up
 - [ ] Reconnect engine
 - [ ] Service + tray split

@@ -11,3 +11,7 @@ publish = false
 [dependencies]
 stayline-core.workspace = true
 anyhow.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+rpassword.workspace = true
+zeroize.workspace = true
