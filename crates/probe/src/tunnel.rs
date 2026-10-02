@@ -19,8 +19,9 @@ pub async fn run(gateway: &Gateway, pin: Option<Fingerprint>, creds: &Credential
         mut from_device,
         to_device,
     } = channels;
-    let (watcher, mut network_changed) =
-        NetworkWatcher::start(device.luid()).context("could not watch for network changes")?;
+    let (events_tx, mut network_changed) = tokio::sync::mpsc::unbounded_channel();
+    let watcher = NetworkWatcher::start(device.luid(), events_tx)
+        .context("could not watch for network changes")?;
     let hooks = WindowsHooks::new(device.luid());
 
     let (status_tx, mut status_rx) = watch::channel(Status::Disconnected);

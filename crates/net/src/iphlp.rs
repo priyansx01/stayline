@@ -30,6 +30,8 @@ use windows::Win32::Networking::WinSock::{
 };
 use windows::core::{GUID, PWSTR};
 
+use stayline_core::supervisor::NetEvent;
+
 use crate::error::{NetError, Result, check};
 
 fn luid(value: u64) -> NET_LUID_LH {
@@ -302,7 +304,7 @@ unsafe impl Send for NetworkWatcher {}
 unsafe impl Sync for NetworkWatcher {}
 
 struct WatchContext {
-    tx: tokio::sync::mpsc::UnboundedSender<()>,
+    tx: tokio::sync::mpsc::UnboundedSender<NetEvent>,
     exclude_luid: u64,
 }
 
@@ -316,7 +318,7 @@ impl WatchContext {
         // SAFETY: the context outlives the registrations (see Drop).
         let ctx = unsafe { &*context.cast::<WatchContext>() };
         if luid != ctx.exclude_luid {
-            let _ = ctx.tx.send(());
+            let _ = ctx.tx.send(NetEvent::Changed);
         }
     }
 }
@@ -364,8 +366,11 @@ unsafe extern "system" fn on_address_change(
 }
 
 impl NetworkWatcher {
-    pub fn start(exclude_luid: u64) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<()>)> {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    /// Sends [`NetEvent::Changed`] on `tx` for every relevant change.
+    pub fn start(
+        exclude_luid: u64,
+        tx: tokio::sync::mpsc::UnboundedSender<NetEvent>,
+    ) -> Result<Self> {
         let context = Box::into_raw(Box::new(WatchContext { tx, exclude_luid }));
         // From here on Drop cancels what was registered and frees the context.
         let mut watcher = Self {
@@ -409,7 +414,7 @@ impl NetworkWatcher {
         check("NotifyUnicastIpAddressChange", err)?;
         watcher.handles.push(handle);
 
-        Ok((watcher, rx))
+        Ok(watcher)
     }
 }
 
@@ -457,7 +462,8 @@ mod tests {
             .build()
             .unwrap();
         let _guard = rt.enter();
-        let (watcher, _rx) = NetworkWatcher::start(0).unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let watcher = NetworkWatcher::start(0, tx).unwrap();
         drop(watcher);
     }
 

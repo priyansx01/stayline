@@ -1,8 +1,9 @@
 //! Keeps the tunnel up: connects, notices drops and reconnects with
 //! backoff, logging in again with the saved credentials each time.
 
-use std::cell::Cell;
 use std::net::Ipv4Addr;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -39,6 +40,32 @@ pub trait TunnelHooks {
     /// Whether the machine has a usable network at all. While it has not,
     /// the supervisor waits for a network change instead of retrying.
     fn network_available(&self) -> bool;
+}
+
+/// Something happened to the machine's networking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetEvent {
+    /// An interface, address or default route changed.
+    Changed,
+    /// The machine woke from sleep or hibernation.
+    Resumed,
+}
+
+/// Completes once shutdown is requested (or the sender is gone). Drops the
+/// watch guard right away so callers' futures stay `Send`.
+async fn stopped(shutdown: &mut watch::Receiver<bool>) {
+    let _ = shutdown.wait_for(|stop| *stop).await;
+}
+
+/// Drains queued events after `first`; `Resumed` wins over `Changed`.
+fn coalesce(rx: &mut mpsc::UnboundedReceiver<NetEvent>, first: NetEvent) -> NetEvent {
+    let mut event = first;
+    while let Ok(next) = rx.try_recv() {
+        if next == NetEvent::Resumed {
+            event = NetEvent::Resumed;
+        }
+    }
+    event
 }
 
 /// What the supervisor is doing, for display.
@@ -116,8 +143,8 @@ pub struct SupervisorConfig<'a> {
 pub struct SupervisorIo<'a> {
     pub from_device: &'a mut mpsc::Receiver<Bytes>,
     pub to_device: &'a mpsc::Sender<Bytes>,
-    /// Fires when the machine's network changes (route changes, resume).
-    pub network_changed: &'a mut mpsc::UnboundedReceiver<()>,
+    /// Network changes and resume from sleep.
+    pub network_changed: &'a mut mpsc::UnboundedReceiver<NetEvent>,
     pub status: &'a watch::Sender<Status>,
     /// Becomes `true` to stop. Dropping the sender also stops.
     pub shutdown: watch::Receiver<bool>,
@@ -178,11 +205,11 @@ pub async fn supervise(
         loop {
             tokio::select! {
                 () = tokio::time::sleep_until(deadline) => break,
-                _ = io.shutdown.wait_for(|stop| *stop) => {
+                () = stopped(&mut io.shutdown) => {
                     io.status.send_replace(Status::Disconnected);
                     return SupervisorEnd::Stopped;
                 }
-                Some(()) = io.network_changed.recv() => {
+                Some(_) = io.network_changed.recv() => {
                     tokio::time::sleep(NETWORK_SETTLE).await;
                     while io.network_changed.try_recv().is_ok() {}
                     if hooks.network_available() {
@@ -236,12 +263,12 @@ async fn connect_once(
     let (cookie, tunnel_cfg, stream) = loop {
         tokio::select! {
             setup = &mut setup => break setup?,
-            _ = shutdown.wait_for(|stop| *stop) => return Ok(Ended::Stopped),
+            () = stopped(&mut shutdown) => return Ok(Ended::Stopped),
             // A login started on a network that just changed may hang until
             // it times out; start over on the new one instead.
-            Some(()) = io.network_changed.recv() => {
-                while io.network_changed.try_recv().is_ok() {}
-                if hooks.gateway_path_changed() {
+            Some(event) = io.network_changed.recv() => {
+                let event = coalesce(io.network_changed, event);
+                if event == NetEvent::Resumed || hooks.gateway_path_changed() {
                     return Ok(Ended::Dropped {
                         was_up: false,
                         reason: "network changed while connecting".to_owned(),
@@ -251,26 +278,35 @@ async fn connect_once(
         }
     };
 
-    let was_up = Cell::new(false);
-    let user_stop = Cell::new(false);
-    let path_changed = Cell::new(false);
+    let was_up = AtomicBool::new(false);
+    let user_stop = AtomicBool::new(false);
+    let rebuild_reason: Mutex<Option<&'static str>> = Mutex::new(None);
     let network_changed = &mut *io.network_changed;
 
     let stop = async {
         let mut events_open = true;
         loop {
             tokio::select! {
-                _ = shutdown.wait_for(|stop| *stop) => {
-                    user_stop.set(true);
+                () = stopped(&mut shutdown) => {
+                    user_stop.store(true, Ordering::Relaxed);
                     return;
                 }
                 event = network_changed.recv(), if events_open => match event {
                     None => events_open = false,
-                    Some(()) => {
-                        while network_changed.try_recv().is_ok() {}
-                        if hooks.gateway_path_changed() {
-                            tracing::info!("path to the gateway changed, rebuilding tunnel");
-                            path_changed.set(true);
+                    Some(event) => {
+                        // After sleep the TCP connection is usually dead even
+                        // on the same network, so rebuild instead of waiting
+                        // for echoes to time out.
+                        let reason = if coalesce(network_changed, event) == NetEvent::Resumed {
+                            Some("resumed from sleep")
+                        } else if hooks.gateway_path_changed() {
+                            Some("network changed")
+                        } else {
+                            None
+                        };
+                        if let Some(reason) = reason {
+                            tracing::info!(reason, "rebuilding tunnel");
+                            *rebuild_reason.lock().expect("reason lock") = Some(reason);
                             return;
                         }
                     }
@@ -288,7 +324,7 @@ async fn connect_once(
         |local_ip, _peer| match hooks.link_up(local_ip, &tunnel_cfg) {
             Ok(()) => {
                 tracing::info!(%local_ip, "tunnel up");
-                was_up.set(true);
+                was_up.store(true, Ordering::Relaxed);
                 io.status.send_replace(Status::Connected { local_ip });
                 true
             }
@@ -301,13 +337,13 @@ async fn connect_once(
     )
     .await;
 
-    if user_stop.get() {
+    if user_stop.load(Ordering::Relaxed) {
         let _ = tokio::time::timeout(LOGOUT_TIMEOUT, client.logout(&cookie)).await;
         return Ok(Ended::Stopped);
     }
 
-    let reason = if path_changed.get() {
-        "network changed".to_owned()
+    let reason = if let Some(reason) = *rebuild_reason.lock().expect("reason lock") {
+        reason.to_owned()
     } else {
         match end {
             TunnelEnd::Ppp(DownReason::EchoTimeout) => "gateway stopped answering".to_owned(),
@@ -319,7 +355,7 @@ async fn connect_once(
         }
     };
     Ok(Ended::Dropped {
-        was_up: was_up.get(),
+        was_up: was_up.load(Ordering::Relaxed),
         reason,
     })
 }
@@ -335,6 +371,17 @@ mod tests {
         assert_eq!(delays, vec![1, 2, 4, 8, 16, 32, 60, 60, 60]);
         b.reset();
         assert_eq!(b.next_delay(), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn resume_wins_when_coalescing_events() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tx.send(NetEvent::Resumed).unwrap();
+        tx.send(NetEvent::Changed).unwrap();
+        assert_eq!(coalesce(&mut rx, NetEvent::Changed), NetEvent::Resumed);
+        assert!(rx.try_recv().is_err());
+        tx.send(NetEvent::Changed).unwrap();
+        assert_eq!(coalesce(&mut rx, NetEvent::Changed), NetEvent::Changed);
     }
 
     #[test]

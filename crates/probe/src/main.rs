@@ -26,6 +26,7 @@ usage:
   stayline-probe cert   <gateway>
   stayline-probe login  <gateway> --user <name> [--realm <realm>] [--pin <sha256>] [--keep-session]
   stayline-probe tunnel <gateway> --user <name> [--realm <realm>] [--pin <sha256>]
+  stayline-probe save-login <gateway> --user <name> [--realm <realm>] [--pin <sha256>]
 
 <gateway> is host, host:port or https://host:port.
 The password is read from STAYLINE_PASSWORD, or prompted for.
@@ -64,6 +65,8 @@ async fn run(args: Vec<String>) -> Result<()> {
         }
         #[cfg(windows)]
         Some("net-selftest") => tunnel::net_selftest(args).await,
+        #[cfg(windows)]
+        Some("save-login") => save_login(LoginArgs::parse(args)?),
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             Ok(())
@@ -138,6 +141,31 @@ async fn login(args: LoginArgs) -> Result<()> {
 }
 
 /// Prompts for the password (and token code if asked) and logs in.
+/// Saves the tray app's settings and the password (DPAPI-encrypted) for
+/// the current Windows user.
+#[cfg(windows)]
+fn save_login(args: LoginArgs) -> Result<()> {
+    use stayline_tray::{secret, settings::Settings};
+
+    let mut settings = Settings::load()?;
+    settings.gateway = args.gateway.to_string();
+    settings.username = args.user.clone();
+    settings.realm = args.realm.clone();
+    settings.pin = args.pin.map(|p| p.to_string());
+    settings.save()?;
+    let creds = read_credentials(args.user, args.realm)?;
+    secret::save(&creds.password)?;
+    println!(
+        "settings     {}",
+        stayline_tray::settings::path()?.display()
+    );
+    println!(
+        "password     {} (encrypted for this Windows user)",
+        secret::path()?.display()
+    );
+    Ok(())
+}
+
 /// Reads the password from `STAYLINE_PASSWORD` or prompts for it.
 fn read_credentials(user: String, realm: Option<String>) -> Result<Credentials> {
     let password = match std::env::var("STAYLINE_PASSWORD") {
