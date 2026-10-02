@@ -154,6 +154,10 @@ impl TunnelHooks for WindowsHooks {
         Ok(())
     }
 
+    fn network_available(&self) -> bool {
+        iphlp::default_route(self.tun_luid).is_some()
+    }
+
     fn gateway_path_changed(&self) -> bool {
         self.gateway
             .lock()

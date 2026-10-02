@@ -15,7 +15,7 @@ pub use device::{DeviceChannels, TunDevice};
 #[cfg(windows)]
 pub use error::{NetError, Result};
 #[cfg(windows)]
-pub use iphlp::RouteWatcher;
+pub use iphlp::NetworkWatcher;
 #[cfg(windows)]
 pub use setup::{GatewayRoute, TunnelNetwork, WindowsHooks};
 

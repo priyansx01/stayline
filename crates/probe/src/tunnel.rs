@@ -9,7 +9,7 @@ use stayline_core::supervisor::{
     self, Status, SupervisorConfig, SupervisorEnd, SupervisorIo, TunnelHooks,
 };
 use stayline_core::{Credentials, Fingerprint, Gateway, Route, TunnelConfig};
-use stayline_net::{DeviceChannels, RouteWatcher, TunDevice, WindowsHooks};
+use stayline_net::{DeviceChannels, NetworkWatcher, TunDevice, WindowsHooks};
 use tokio::sync::watch;
 
 pub async fn run(gateway: &Gateway, pin: Option<Fingerprint>, creds: &Credentials) -> Result<()> {
@@ -20,7 +20,7 @@ pub async fn run(gateway: &Gateway, pin: Option<Fingerprint>, creds: &Credential
         to_device,
     } = channels;
     let (watcher, mut network_changed) =
-        RouteWatcher::start(device.luid()).context("could not watch for network changes")?;
+        NetworkWatcher::start(device.luid()).context("could not watch for network changes")?;
     let hooks = WindowsHooks::new(device.luid());
 
     let (status_tx, mut status_rx) = watch::channel(Status::Disconnected);
@@ -85,6 +85,9 @@ fn print_status(status: &Status) {
             "{now} down: {last_error}; retrying in {} s (or as soon as the network changes)",
             retry_in.as_secs()
         ),
+        Status::WaitingForNetwork => {
+            println!("{now} down: no network; reconnecting as soon as it is back")
+        }
         Status::NeedsUser { reason } => println!("{now} NEEDS YOU: {reason}"),
         Status::Disconnected => {}
     }

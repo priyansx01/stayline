@@ -21,8 +21,8 @@ use windows::Win32::NetworkManagement::IpHelper::{
     DeleteUnicastIpAddressEntry, FreeMibTable, GetBestRoute2, GetIpForwardTable2,
     GetIpInterfaceEntry, InitializeIpForwardEntry, InitializeIpInterfaceEntry,
     InitializeUnicastIpAddressEntry, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2, MIB_IPINTERFACE_ROW,
-    MIB_NOTIFICATION_TYPE, MIB_UNICASTIPADDRESS_ROW, NotifyRouteChange2, SetInterfaceDnsSettings,
-    SetIpInterfaceEntry,
+    MIB_NOTIFICATION_TYPE, MIB_UNICASTIPADDRESS_ROW, NotifyIpInterfaceChange, NotifyRouteChange2,
+    NotifyUnicastIpAddressChange, SetInterfaceDnsSettings, SetIpInterfaceEntry,
 };
 use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
 use windows::Win32::Networking::WinSock::{
@@ -280,21 +280,39 @@ fn interface_metric(if_luid: u64) -> Option<u32> {
     }
 }
 
-/// Calls back on every IPv4 default-route change outside one interface
-/// (network joined or lost, roaming, resume from sleep).
-pub struct RouteWatcher {
-    handle: HANDLE,
+/// Signals network changes outside one interface (the tunnel): default
+/// routes, interface connect/disconnect, and address changes.
+///
+/// Turning Wi-Fi off and on does not touch the default route, which Windows
+/// keeps in its table; only interface and address notifications show it.
+pub struct NetworkWatcher {
+    handles: Vec<HANDLE>,
     context: *mut WatchContext,
 }
 
-// SAFETY: the notification handle and context may be used from any thread;
-// the context is only freed after the notification is cancelled.
-unsafe impl Send for RouteWatcher {}
-unsafe impl Sync for RouteWatcher {}
+// SAFETY: the notification handles and context may be used from any
+// thread; the context is only freed after every notification is cancelled.
+unsafe impl Send for NetworkWatcher {}
+unsafe impl Sync for NetworkWatcher {}
 
 struct WatchContext {
     tx: tokio::sync::mpsc::UnboundedSender<()>,
     exclude_luid: u64,
+}
+
+impl WatchContext {
+    /// # Safety
+    /// `context` must be null or the pointer registered by `NetworkWatcher`.
+    unsafe fn signal(context: *const c_void, luid: u64) {
+        if context.is_null() {
+            return;
+        }
+        // SAFETY: the context outlives the registrations (see Drop).
+        let ctx = unsafe { &*context.cast::<WatchContext>() };
+        if luid != ctx.exclude_luid {
+            let _ = ctx.tx.send(());
+        }
+    }
 }
 
 unsafe extern "system" fn on_route_change(
@@ -302,51 +320,101 @@ unsafe extern "system" fn on_route_change(
     row: *const MIB_IPFORWARD_ROW2,
     _kind: MIB_NOTIFICATION_TYPE,
 ) {
-    if context.is_null() || row.is_null() {
-        return;
-    }
-    // SAFETY: context is the WatchContext registered in start() and stays
-    // alive until CancelMibChangeNotify2 returns; row is valid for the call.
+    // SAFETY: row is valid for the duration of the callback.
     unsafe {
-        let ctx = &*context.cast::<WatchContext>();
-        if (*row).DestinationPrefix.PrefixLength == 0
-            && (*row).InterfaceLuid.Value != ctx.exclude_luid
-        {
-            let _ = ctx.tx.send(());
+        // Only default routes matter; host routes change on every attempt.
+        if !row.is_null() && (*row).DestinationPrefix.PrefixLength == 0 {
+            WatchContext::signal(context, (*row).InterfaceLuid.Value);
         }
     }
 }
 
-impl RouteWatcher {
+// Interface notifications only fill in Family, InterfaceLuid and
+// InterfaceIndex, so nothing else is read here.
+unsafe extern "system" fn on_interface_change(
+    context: *const c_void,
+    row: *const MIB_IPINTERFACE_ROW,
+    _kind: MIB_NOTIFICATION_TYPE,
+) {
+    // SAFETY: row is valid for the duration of the callback.
+    unsafe {
+        if !row.is_null() {
+            WatchContext::signal(context, (*row).InterfaceLuid.Value);
+        }
+    }
+}
+
+unsafe extern "system" fn on_address_change(
+    context: *const c_void,
+    row: *const MIB_UNICASTIPADDRESS_ROW,
+    _kind: MIB_NOTIFICATION_TYPE,
+) {
+    // SAFETY: row is valid for the duration of the callback.
+    unsafe {
+        if !row.is_null() {
+            WatchContext::signal(context, (*row).InterfaceLuid.Value);
+        }
+    }
+}
+
+impl NetworkWatcher {
     pub fn start(exclude_luid: u64) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<()>)> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let context = Box::into_raw(Box::new(WatchContext { tx, exclude_luid }));
+        // From here on Drop cancels what was registered and frees the context.
+        let mut watcher = Self {
+            handles: Vec::with_capacity(3),
+            context,
+        };
+        let ctx: *const c_void = context.cast_const().cast();
+
         let mut handle = HANDLE::default();
-        // SAFETY: context outlives the registration (freed in Drop).
+        // SAFETY: ctx outlives the registration (freed in Drop).
+        let err =
+            unsafe { NotifyRouteChange2(AF_INET, Some(on_route_change), ctx, false, &mut handle) };
+        check("NotifyRouteChange2", err)?;
+        watcher.handles.push(handle);
+
+        let mut handle = HANDLE::default();
+        // SAFETY: as above.
         let err = unsafe {
-            NotifyRouteChange2(
+            NotifyIpInterfaceChange(
                 AF_INET,
-                Some(on_route_change),
-                context.cast_const().cast(),
+                Some(on_interface_change),
+                Some(ctx),
                 false,
                 &mut handle,
             )
         };
-        if let Err(e) = check("NotifyRouteChange2", err) {
-            // SAFETY: registration failed, so nothing else holds the context.
-            drop(unsafe { Box::from_raw(context) });
-            return Err(e);
-        }
-        Ok((Self { handle, context }, rx))
+        check("NotifyIpInterfaceChange", err)?;
+        watcher.handles.push(handle);
+
+        let mut handle = HANDLE::default();
+        // SAFETY: as above.
+        let err = unsafe {
+            NotifyUnicastIpAddressChange(
+                AF_INET,
+                Some(on_address_change),
+                Some(ctx),
+                false,
+                &mut handle,
+            )
+        };
+        check("NotifyUnicastIpAddressChange", err)?;
+        watcher.handles.push(handle);
+
+        Ok((watcher, rx))
     }
 }
 
-impl Drop for RouteWatcher {
+impl Drop for NetworkWatcher {
     fn drop(&mut self) {
         // SAFETY: CancelMibChangeNotify2 waits for running callbacks, after
         // which the context is no longer used.
         unsafe {
-            let _ = CancelMibChangeNotify2(self.handle);
+            for handle in &self.handles {
+                let _ = CancelMibChangeNotify2(*handle);
+            }
             drop(Box::from_raw(self.context));
         }
     }
@@ -378,12 +446,12 @@ mod tests {
     }
 
     #[test]
-    fn route_watcher_starts_and_stops() {
+    fn network_watcher_starts_and_stops() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
         let _guard = rt.enter();
-        let (watcher, _rx) = RouteWatcher::start(0).unwrap();
+        let (watcher, _rx) = NetworkWatcher::start(0).unwrap();
         drop(watcher);
     }
 

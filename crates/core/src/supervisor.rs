@@ -20,6 +20,8 @@ use crate::tunnel::{self, TunnelEnd};
 /// Pause after a network change before retrying, so DHCP and routes settle.
 const NETWORK_SETTLE: Duration = Duration::from_secs(1);
 const LOGOUT_TIMEOUT: Duration = Duration::from_secs(3);
+/// While offline, check again this often even without a change event.
+const OFFLINE_RECHECK: Duration = Duration::from_secs(60);
 
 /// Platform side of keeping a tunnel up (adapter, routes).
 pub trait TunnelHooks {
@@ -33,6 +35,10 @@ pub trait TunnelHooks {
     /// Called on network-change events while connected. `true` means the
     /// path to the gateway changed and the tunnel must be rebuilt.
     fn gateway_path_changed(&self) -> bool;
+
+    /// Whether the machine has a usable network at all. While it has not,
+    /// the supervisor waits for a network change instead of retrying.
+    fn network_available(&self) -> bool;
 }
 
 /// What the supervisor is doing, for display.
@@ -49,6 +55,8 @@ pub enum Status {
         retry_in: Duration,
         last_error: String,
     },
+    /// No network; reconnects as soon as Windows reports one.
+    WaitingForNetwork,
     NeedsUser {
         reason: String,
     },
@@ -148,13 +156,23 @@ pub async fn supervise(
             Err(e) => e.to_string(),
         };
 
-        let retry_in = backoff.next_delay();
-        tracing::warn!(error = %last_error, ?retry_in, "tunnel down, will reconnect");
-        io.status.send_replace(Status::Reconnecting {
-            attempt,
-            retry_in,
-            last_error,
-        });
+        let retry_in = if hooks.network_available() {
+            let retry_in = backoff.next_delay();
+            tracing::warn!(error = %last_error, ?retry_in, "tunnel down, will reconnect");
+            io.status.send_replace(Status::Reconnecting {
+                attempt,
+                retry_in,
+                last_error,
+            });
+            retry_in
+        } else {
+            // Retrying without a network only grows the backoff; wait for one.
+            tracing::warn!(error = %last_error, "tunnel down and no network, waiting");
+            io.status.send_replace(Status::WaitingForNetwork);
+            backoff.reset();
+            attempt = 0;
+            OFFLINE_RECHECK
+        };
 
         tokio::select! {
             () = tokio::time::sleep(retry_in) => {}
