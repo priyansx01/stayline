@@ -6,18 +6,23 @@
 //! only ever held as `MaybeUninit` and touched field by field through raw
 //! pointers, never moved or copied as values.
 
+use std::ffi::c_void;
 use std::mem::MaybeUninit;
 use std::net::Ipv4Addr;
 use std::ptr::addr_of_mut;
 
-use windows::Win32::Foundation::{ERROR_NOT_FOUND, ERROR_OBJECT_ALREADY_EXISTS, WIN32_ERROR};
+use windows::Win32::Foundation::{
+    ERROR_NOT_FOUND, ERROR_OBJECT_ALREADY_EXISTS, HANDLE, WIN32_ERROR,
+};
 use windows::Win32::NetworkManagement::IpHelper::{
-    ConvertInterfaceLuidToGuid, CreateIpForwardEntry2, CreateUnicastIpAddressEntry,
-    DNS_INTERFACE_SETTINGS, DNS_INTERFACE_SETTINGS_VERSION1, DNS_SETTING_NAMESERVER,
-    DNS_SETTING_SEARCHLIST, DeleteIpForwardEntry2, DeleteUnicastIpAddressEntry, GetBestRoute2,
+    CancelMibChangeNotify2, ConvertInterfaceLuidToGuid, CreateIpForwardEntry2,
+    CreateUnicastIpAddressEntry, DNS_INTERFACE_SETTINGS, DNS_INTERFACE_SETTINGS_VERSION1,
+    DNS_SETTING_NAMESERVER, DNS_SETTING_SEARCHLIST, DeleteIpForwardEntry2,
+    DeleteUnicastIpAddressEntry, FreeMibTable, GetBestRoute2, GetIpForwardTable2,
     GetIpInterfaceEntry, InitializeIpForwardEntry, InitializeIpInterfaceEntry,
-    InitializeUnicastIpAddressEntry, MIB_IPFORWARD_ROW2, MIB_IPINTERFACE_ROW,
-    MIB_UNICASTIPADDRESS_ROW, SetInterfaceDnsSettings, SetIpInterfaceEntry,
+    InitializeUnicastIpAddressEntry, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2, MIB_IPINTERFACE_ROW,
+    MIB_NOTIFICATION_TYPE, MIB_UNICASTIPADDRESS_ROW, NotifyRouteChange2, SetInterfaceDnsSettings,
+    SetIpInterfaceEntry,
 };
 use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
 use windows::Win32::Networking::WinSock::{
@@ -220,6 +225,133 @@ pub fn set_dns(if_luid: u64, servers: &[Ipv4Addr], search: &[String]) -> Result<
     })
 }
 
+/// The default route (`0.0.0.0/0`) Windows prefers, ignoring interface
+/// `exclude_luid` (the tunnel): interface LUID and next hop. `None` when
+/// the machine has no other network.
+pub fn default_route(exclude_luid: u64) -> Option<(u64, Ipv4Addr)> {
+    let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
+    // SAFETY: Windows allocates the table; it is freed below.
+    let err = unsafe { GetIpForwardTable2(AF_INET, &mut table) };
+    if check("GetIpForwardTable2", err).is_err() || table.is_null() {
+        return None;
+    }
+
+    let mut best: Option<(u32, u64, Ipv4Addr)> = None;
+    // SAFETY: the table holds NumEntries rows; only plain fields are read
+    // through pointers, never whole rows.
+    unsafe {
+        let count = (*table).NumEntries as usize;
+        let rows = (&raw const (*table).Table).cast::<MIB_IPFORWARD_ROW2>();
+        for i in 0..count {
+            let row = rows.add(i);
+            if (*row).DestinationPrefix.PrefixLength != 0 {
+                continue;
+            }
+            let luid = (*row).InterfaceLuid.Value;
+            if luid == exclude_luid {
+                continue;
+            }
+            let Some(if_metric) = interface_metric(luid) else {
+                continue;
+            };
+            let metric = (*row).Metric.saturating_add(if_metric);
+            if best.is_none_or(|(m, _, _)| metric < m) {
+                best = Some((metric, luid, ipv4_at(&raw const (*row).NextHop)));
+            }
+        }
+        FreeMibTable(table.cast());
+    }
+    best.map(|(_, luid, hop)| (luid, hop))
+}
+
+/// Interface metric, or `None` if the interface has no IPv4 or is gone.
+fn interface_metric(if_luid: u64) -> Option<u32> {
+    let mut row = MaybeUninit::<MIB_IPINTERFACE_ROW>::zeroed();
+    let p = row.as_mut_ptr();
+    // SAFETY: p points to writable memory the size of the row.
+    unsafe {
+        InitializeIpInterfaceEntry(p);
+        addr_of_mut!((*p).Family).write(AF_INET);
+        addr_of_mut!((*p).InterfaceLuid).write(luid(if_luid));
+        if GetIpInterfaceEntry(p).is_err() || (&raw const (*p).Connected).cast::<u8>().read() == 0 {
+            return None;
+        }
+        Some((*p).Metric)
+    }
+}
+
+/// Calls back on every IPv4 default-route change outside one interface
+/// (network joined or lost, roaming, resume from sleep).
+pub struct RouteWatcher {
+    handle: HANDLE,
+    context: *mut WatchContext,
+}
+
+// SAFETY: the notification handle and context may be used from any thread;
+// the context is only freed after the notification is cancelled.
+unsafe impl Send for RouteWatcher {}
+unsafe impl Sync for RouteWatcher {}
+
+struct WatchContext {
+    tx: tokio::sync::mpsc::UnboundedSender<()>,
+    exclude_luid: u64,
+}
+
+unsafe extern "system" fn on_route_change(
+    context: *const c_void,
+    row: *const MIB_IPFORWARD_ROW2,
+    _kind: MIB_NOTIFICATION_TYPE,
+) {
+    if context.is_null() || row.is_null() {
+        return;
+    }
+    // SAFETY: context is the WatchContext registered in start() and stays
+    // alive until CancelMibChangeNotify2 returns; row is valid for the call.
+    unsafe {
+        let ctx = &*context.cast::<WatchContext>();
+        if (*row).DestinationPrefix.PrefixLength == 0
+            && (*row).InterfaceLuid.Value != ctx.exclude_luid
+        {
+            let _ = ctx.tx.send(());
+        }
+    }
+}
+
+impl RouteWatcher {
+    pub fn start(exclude_luid: u64) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<()>)> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let context = Box::into_raw(Box::new(WatchContext { tx, exclude_luid }));
+        let mut handle = HANDLE::default();
+        // SAFETY: context outlives the registration (freed in Drop).
+        let err = unsafe {
+            NotifyRouteChange2(
+                AF_INET,
+                Some(on_route_change),
+                context.cast_const().cast(),
+                false,
+                &mut handle,
+            )
+        };
+        if let Err(e) = check("NotifyRouteChange2", err) {
+            // SAFETY: registration failed, so nothing else holds the context.
+            drop(unsafe { Box::from_raw(context) });
+            return Err(e);
+        }
+        Ok((Self { handle, context }, rx))
+    }
+}
+
+impl Drop for RouteWatcher {
+    fn drop(&mut self) {
+        // SAFETY: CancelMibChangeNotify2 waits for running callbacks, after
+        // which the context is no longer used.
+        unsafe {
+            let _ = CancelMibChangeNotify2(self.handle);
+            drop(Box::from_raw(self.context));
+        }
+    }
+}
+
 fn warn_unless_ok_or_missing(err: WIN32_ERROR, what: impl FnOnce() -> String) {
     if err.is_err() && err != ERROR_NOT_FOUND {
         tracing::warn!(code = err.0, "{}", what());
@@ -239,7 +371,20 @@ mod tests {
         // Read-only; works without administrator rights.
         if let Ok((luid, _)) = best_route(Ipv4Addr::new(1, 1, 1, 1)) {
             assert_ne!(luid, 0);
+            // With no tunnel up, the preferred default route is the same path.
+            let (uplink, _) = default_route(0).expect("a default route exists");
+            assert_eq!(uplink, luid);
         }
+    }
+
+    #[test]
+    fn route_watcher_starts_and_stops() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let (watcher, _rx) = RouteWatcher::start(0).unwrap();
+        drop(watcher);
     }
 
     #[test]

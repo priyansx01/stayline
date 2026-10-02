@@ -64,7 +64,7 @@ To bring the tunnel up in the foreground, from an **elevated** prompt:
 cargo run -p stayline-probe -- tunnel vpn.example.com:10443 --user alice [--pin <sha256>]
 ```
 
-This creates a `stayline` network adapter, sets its address, routes and DNS, and stays connected until Ctrl+C. Run with `RUST_LOG=stayline_core=debug` to see PPP negotiation.
+This creates a `stayline` network adapter, sets its address, routes and DNS, and stays connected until Ctrl+C. If the connection drops (Wi-Fi off, network switch, sleep) it keeps the adapter and routes, logs in again with the password it was given and backs off 1 s, 2 s, 4 s … up to 60 s, retrying at once when Windows reports a network change. It stops retrying only for problems the user must fix, such as a rejected password. Run with `RUST_LOG=stayline_core=debug` to see PPP negotiation.
 
 Known limitation: with split tunnelling, the tunnel's DNS servers get the lowest interface metric, so Windows asks them first for all names, not only the split-DNS domains.
 
@@ -73,7 +73,7 @@ Known limitation: with split tunnelling, the tunnel's DNS servers get the lowest
 - [x] Workspace scaffold
 - [x] Login probe
 - [x] Tunnel up (tested against a FortiGate with split tunnelling)
-- [ ] Reconnect engine
+- [x] Reconnect engine (network-change and echo based; sleep/resume events come with the service)
 - [ ] Service + tray split
 - [ ] Login and settings window
 - [ ] MSI package

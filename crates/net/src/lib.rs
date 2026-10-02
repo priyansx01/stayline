@@ -15,7 +15,9 @@ pub use device::{DeviceChannels, TunDevice};
 #[cfg(windows)]
 pub use error::{NetError, Result};
 #[cfg(windows)]
-pub use setup::TunnelNetwork;
+pub use iphlp::RouteWatcher;
+#[cfg(windows)]
+pub use setup::{GatewayRoute, TunnelNetwork, WindowsHooks};
 
 /// MTU of the tunnel adapter; matches the PPP MRU we negotiate.
 pub const TUNNEL_MTU: u32 = stayline_core::ppp::DEFAULT_MRU as u32;

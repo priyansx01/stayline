@@ -1,16 +1,18 @@
 use std::net::Ipv4Addr;
+use std::sync::Mutex;
 
 use stayline_core::TunnelConfig;
+use stayline_core::supervisor::TunnelHooks;
 
 use crate::TUNNEL_MTU;
-use crate::error::Result;
+use crate::error::{NetError, Result};
 use crate::iphlp::{self, RouteRow};
 
 /// Interface metric for the tunnel: low, so its routes and DNS win.
 const TUNNEL_METRIC: u32 = 1;
 
-/// Address, routes and DNS applied for one tunnel session. Dropping it
-/// removes the routes and address again.
+/// Address, routes and DNS of the tunnel adapter for one tunnel
+/// configuration. Dropping it removes the routes and address again.
 #[derive(Debug)]
 pub struct TunnelNetwork {
     tun_luid: u64,
@@ -19,20 +21,7 @@ pub struct TunnelNetwork {
 }
 
 impl TunnelNetwork {
-    /// Configures the tunnel adapter for `cfg`.
-    ///
-    /// `gateway_ip` is the address the tunnel's TLS connection uses; a host
-    /// route keeps it on the current physical path so the tunnel does not
-    /// try to route itself.
-    pub fn apply(
-        tun_luid: u64,
-        local_ip: Ipv4Addr,
-        gateway_ip: Ipv4Addr,
-        cfg: &TunnelConfig,
-    ) -> Result<Self> {
-        // Look this up before any tunnel routes exist.
-        let (phys_luid, phys_next_hop) = iphlp::best_route(gateway_ip)?;
-
+    pub fn apply(tun_luid: u64, local_ip: Ipv4Addr, cfg: &TunnelConfig) -> Result<Self> {
         // Partially applied state is cleaned up by Drop if a step fails.
         let mut net = Self {
             tun_luid,
@@ -42,37 +31,18 @@ impl TunnelNetwork {
         iphlp::add_address(tun_luid, local_ip)?;
         iphlp::set_mtu_and_metric(tun_luid, TUNNEL_MTU, TUNNEL_METRIC)?;
 
-        if phys_luid != tun_luid {
-            net.add(phys_luid, gateway_ip, 32, phys_next_hop)?;
-        }
-
         if cfg.is_full_tunnel() {
             // Two /1 routes beat the existing default route without replacing it.
-            net.add(
-                tun_luid,
-                Ipv4Addr::new(0, 0, 0, 0),
-                1,
-                Ipv4Addr::UNSPECIFIED,
-            )?;
-            net.add(
-                tun_luid,
-                Ipv4Addr::new(128, 0, 0, 0),
-                1,
-                Ipv4Addr::UNSPECIFIED,
-            )?;
+            net.add(Ipv4Addr::new(0, 0, 0, 0), 1)?;
+            net.add(Ipv4Addr::new(128, 0, 0, 0), 1)?;
         } else {
             for route in &cfg.routes {
                 let network = Ipv4Addr::from(u32::from(route.network) & u32::from(route.mask));
-                net.add(
-                    tun_luid,
-                    network,
-                    route.prefix_len() as u8,
-                    Ipv4Addr::UNSPECIFIED,
-                )?;
+                net.add(network, route.prefix_len() as u8)?;
             }
             // Make sure the tunnel DNS servers are reachable through the tunnel.
             for dns in &cfg.dns {
-                net.add(tun_luid, *dns, 32, Ipv4Addr::UNSPECIFIED)?;
+                net.add(*dns, 32)?;
             }
         }
 
@@ -84,14 +54,10 @@ impl TunnelNetwork {
         Ok(net)
     }
 
-    fn add(
-        &mut self,
-        luid: u64,
-        network: Ipv4Addr,
-        prefix_len: u8,
-        next_hop: Ipv4Addr,
-    ) -> Result<()> {
-        if let Some(row) = iphlp::add_route(luid, network, prefix_len, next_hop, 0)? {
+    fn add(&mut self, network: Ipv4Addr, prefix_len: u8) -> Result<()> {
+        if let Some(row) =
+            iphlp::add_route(self.tun_luid, network, prefix_len, Ipv4Addr::UNSPECIFIED, 0)?
+        {
             tracing::debug!(?row, "route added");
             self.routes.push(row);
         }
@@ -105,6 +71,95 @@ impl Drop for TunnelNetwork {
             iphlp::delete_route(row);
         }
         iphlp::delete_address(self.tun_luid, self.local_ip);
+    }
+}
+
+/// Host route that keeps traffic to the gateway on the physical network,
+/// so the tunnel does not try to carry itself. Removed on drop.
+#[derive(Debug)]
+pub struct GatewayRoute {
+    route: Option<RouteRow>,
+    /// Default route at the time the route was pinned.
+    uplink: Option<(u64, Ipv4Addr)>,
+}
+
+impl GatewayRoute {
+    pub fn pin(tun_luid: u64, gateway_ip: Ipv4Addr) -> Result<Self> {
+        let uplink = iphlp::default_route(tun_luid);
+        let (luid, next_hop) = match iphlp::best_route(gateway_ip) {
+            Ok((luid, hop)) if luid != tun_luid => (luid, hop),
+            // The best route goes into the tunnel (full tunnel): use the uplink.
+            _ => uplink.ok_or(NetError::Offline)?,
+        };
+        let route = iphlp::add_route(luid, gateway_ip, 32, next_hop, 0)?;
+        tracing::debug!(%gateway_ip, %next_hop, "gateway route pinned");
+        Ok(Self { route, uplink })
+    }
+
+    /// Whether the machine's uplink is different from when this was pinned.
+    pub fn uplink_changed(&self, tun_luid: u64) -> bool {
+        iphlp::default_route(tun_luid) != self.uplink
+    }
+}
+
+impl Drop for GatewayRoute {
+    fn drop(&mut self) {
+        if let Some(route) = &self.route {
+            iphlp::delete_route(route);
+        }
+    }
+}
+
+/// [`TunnelHooks`] for the Windows tunnel adapter.
+///
+/// The adapter's address and routes stay in place while the tunnel is down,
+/// so applications see a pause rather than a vanished network.
+pub struct WindowsHooks {
+    tun_luid: u64,
+    gateway: Mutex<Option<GatewayRoute>>,
+    network: Mutex<Option<(Ipv4Addr, TunnelConfig, TunnelNetwork)>>,
+}
+
+impl WindowsHooks {
+    pub fn new(tun_luid: u64) -> Self {
+        Self {
+            tun_luid,
+            gateway: Mutex::new(None),
+            network: Mutex::new(None),
+        }
+    }
+}
+
+impl TunnelHooks for WindowsHooks {
+    fn route_to_gateway(&self, gateway_ip: Ipv4Addr) -> Result<(), String> {
+        let mut gateway = self.gateway.lock().expect("gateway route lock");
+        // Remove the old route first: it may point at a network we left.
+        *gateway = None;
+        *gateway = Some(GatewayRoute::pin(self.tun_luid, gateway_ip).map_err(|e| e.to_string())?);
+        Ok(())
+    }
+
+    fn link_up(&self, local_ip: Ipv4Addr, cfg: &TunnelConfig) -> Result<(), String> {
+        let mut network = self.network.lock().expect("tunnel network lock");
+        if let Some((ip, old_cfg, _)) = network.as_ref()
+            && *ip == local_ip
+            && old_cfg == cfg
+        {
+            return Ok(());
+        }
+        *network = None;
+        let applied =
+            TunnelNetwork::apply(self.tun_luid, local_ip, cfg).map_err(|e| e.to_string())?;
+        *network = Some((local_ip, cfg.clone(), applied));
+        Ok(())
+    }
+
+    fn gateway_path_changed(&self) -> bool {
+        self.gateway
+            .lock()
+            .expect("gateway route lock")
+            .as_ref()
+            .is_some_and(|g| g.uplink_changed(self.tun_luid))
     }
 }
 

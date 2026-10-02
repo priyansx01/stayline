@@ -9,6 +9,7 @@ pub mod config;
 pub mod error;
 pub mod gateway;
 pub mod ppp;
+pub mod supervisor;
 pub mod tls;
 pub mod tunnel;
 

@@ -9,6 +9,9 @@ pub enum NetError {
     #[error("{call} failed with Windows error {code}")]
     Win32 { call: &'static str, code: u32 },
 
+    #[error("no network connection")]
+    Offline,
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

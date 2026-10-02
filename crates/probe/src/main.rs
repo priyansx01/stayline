@@ -59,9 +59,8 @@ async fn run(args: Vec<String>) -> Result<()> {
         #[cfg(windows)]
         Some("tunnel") => {
             let args = LoginArgs::parse(args)?;
-            let (gateway, pin) = (args.gateway.clone(), args.pin);
-            let (client, cookie) = authenticate(args).await?;
-            tunnel::run(&client, &gateway, pin, &cookie).await
+            let creds = read_credentials(args.user, args.realm)?;
+            tunnel::run(&args.gateway, args.pin, &creds).await
         }
         #[cfg(windows)]
         Some("net-selftest") => tunnel::net_selftest(args).await,
@@ -139,19 +138,23 @@ async fn login(args: LoginArgs) -> Result<()> {
 }
 
 /// Prompts for the password (and token code if asked) and logs in.
-async fn authenticate(args: LoginArgs) -> Result<(GatewayClient, SessionCookie)> {
+/// Reads the password from `STAYLINE_PASSWORD` or prompts for it.
+fn read_credentials(user: String, realm: Option<String>) -> Result<Credentials> {
     let password = match std::env::var("STAYLINE_PASSWORD") {
         Ok(p) => Zeroizing::new(p),
         Err(_) => Zeroizing::new(rpassword::prompt_password(format!(
-            "password for {}: ",
-            args.user
+            "password for {user}: "
         ))?),
     };
-    let creds = Credentials {
-        username: args.user,
+    Ok(Credentials {
+        username: user,
         password,
-        realm: args.realm,
-    };
+        realm,
+    })
+}
+
+async fn authenticate(args: LoginArgs) -> Result<(GatewayClient, SessionCookie)> {
+    let creds = read_credentials(args.user, args.realm)?;
     let client = GatewayClient::new(args.gateway, args.pin)?;
 
     let cookie = match client.login(&creds).await {

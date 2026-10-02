@@ -42,8 +42,34 @@ pub enum Error {
     #[error("tunnel protocol error: {0}")]
     Protocol(String),
 
+    #[error("the gateway asked for a token code")]
+    TokenRequired,
+
+    #[error("{0} has no IPv4 address")]
+    NoIpv4Address(String),
+
+    #[error("network setup failed: {0}")]
+    Platform(String),
+
     #[error("unexpected login response (HTTP {status}): {body}")]
     UnexpectedLogin { status: u16, body: String },
+}
+
+impl Error {
+    /// Errors that retrying cannot fix: the user has to do something.
+    /// Retrying a rejected password could also lock the account.
+    pub fn needs_user(&self) -> bool {
+        matches!(
+            self,
+            Error::BadCredentials
+                | Error::BadToken
+                | Error::TokenRequired
+                | Error::PasswordChangeRequired
+                | Error::SamlRequired
+                | Error::InvalidGateway(_)
+                | Error::InvalidFingerprint
+        )
+    }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

@@ -1,7 +1,7 @@
 //! The SSL-VPN data channel: a TLS stream carrying framed PPP.
 
 use std::future::Future;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use bytes::{Bytes, BytesMut};
@@ -24,15 +24,30 @@ const DEVICE_BATCH: usize = 64;
 
 pub type TunnelStream = TlsStream<TcpStream>;
 
-/// Opens the tunnel connection: TLS to the gateway, then
+/// The gateway's IPv4 address (the host itself if it is an IP literal).
+pub async fn resolve(gateway: &Gateway) -> Result<Ipv4Addr> {
+    if let Ok(ip) = gateway.host().parse() {
+        return Ok(ip);
+    }
+    tokio::net::lookup_host((gateway.host(), gateway.port()))
+        .await?
+        .find_map(|addr| match addr {
+            SocketAddr::V4(v4) => Some(*v4.ip()),
+            SocketAddr::V6(_) => None,
+        })
+        .ok_or_else(|| Error::NoIpv4Address(gateway.host().to_owned()))
+}
+
+/// Opens the tunnel connection to `gateway_ip`: TLS, then
 /// `GET /remote/sslvpn-tunnel`. The stream carries PPP from here on.
 pub async fn connect(
+    gateway_ip: Ipv4Addr,
     gateway: &Gateway,
     pin: Option<Fingerprint>,
     cookie: &SessionCookie,
 ) -> Result<TunnelStream> {
     let open = async {
-        let tcp = TcpStream::connect((gateway.host(), gateway.port())).await?;
+        let tcp = TcpStream::connect((gateway_ip, gateway.port())).await?;
         tcp.set_nodelay(true)?;
         let connector = TlsConnector::from(tls::client_config(pin)?);
         let mut stream = connector.connect(tls::server_name(gateway)?, tcp).await?;
