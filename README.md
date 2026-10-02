@@ -72,7 +72,7 @@ Known limitation: with split tunnelling, the tunnel's DNS servers get the lowest
 
 - [x] Workspace scaffold
 - [x] Login probe
-- [x] Tunnel up (needs testing against a real gateway)
+- [x] Tunnel up (tested against a FortiGate with split tunnelling)
 - [ ] Reconnect engine
 - [ ] Service + tray split
 - [ ] Login and settings window
