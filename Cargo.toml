@@ -29,6 +29,7 @@ tray-icon = "0.26.0"
 muda = "0.21.0"
 slint = "1.18.1"
 slint-build = "1.18.1"
+embed-resource = "3.0.11"
 tauri-winrt-notification = "0.8.1"
 
 # Async, TLS, HTTP

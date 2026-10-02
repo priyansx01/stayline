@@ -97,4 +97,34 @@ Known limitation: with split tunnelling, the tunnel's DNS servers get the lowest
 - [x] Reconnect engine (network-change and echo based; sleep/resume events come with the service)
 - [x] Service + tray split
 - [x] Login and settings window
-- [ ] MSI package
+- [x] MSI package
+
+## Distributing to users
+
+Build the installer (needs the .NET SDK; WiX 5 is restored as a repo-local tool):
+
+```
+# Generic installer: no connection built in
+powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1
+
+# Company installer: employees only enter username and password
+powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1 -Name "Company VPN" -Gateway vpn.example.com:10443 -Pin <sha256>
+```
+
+Options: `-Realm`, `-UserConnections no` (users cannot add their own connections), `-TrustPrompt no` (users cannot accept an unpinned certificate). The MSI lands in `target\installer`.
+
+The installer puts the service, app and `wintun.dll` in `C:\Program Files\stayline`, adds a Start-menu entry, starts the app at sign-in for every user (each user can turn this off in Preferences), and sets up the company connection in `%ProgramData%\stayline\connections.toml`, which users can read but not change. Upgrades keep the company connection; uninstalling removes it.
+
+For Intune, Group Policy or other silent deployment, pass the connection to a generic installer:
+
+```
+msiexec /i stayline-0.1.0.msi GATEWAY=vpn.example.com:10443 PIN=<sha256> CONNECTIONNAME="Company VPN" /qn
+```
+
+Administrators can also manage company connections directly with `stayline-svc provision ...` and `stayline-svc unprovision --name <name>`.
+
+Get the certificate fingerprint with `stayline-probe cert <gateway>` and confirm it with whoever runs the gateway. If the gateway has a publicly trusted certificate, leave the pin out.
+
+## Credits
+
+stayline is built on open-source software; the About page lists every component and `THIRD-PARTY-NOTICES.html` (shipped with the installer) holds the full licence texts. Regenerate both with `scripts\gen-notices.ps1` after changing dependencies. stayline is not affiliated with or endorsed by Fortinet, Inc.; FortiGate and FortiClient are trademarks of Fortinet, Inc. Protocol behaviour was learned from [openfortivpn](https://github.com/adrienverge/openfortivpn); no openfortivpn code is included.

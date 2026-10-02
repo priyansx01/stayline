@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  stayline installer (WiX Toolset 5). Build it with scripts\build-installer.ps1.
+
+  A company connection can be built in (build-installer.ps1 -Gateway ...)
+  or passed when installing:
+    msiexec /i stayline.msi GATEWAY=vpn.example.com:10443 PIN=<sha256> CONNECTIONNAME="Company VPN" /qn
+  Optional: REALM=..., USERCONNECTIONS=no, TRUSTPROMPT=no.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="stayline"
+           Manufacturer="stayline"
+           Version="$(var.Version)"
+           UpgradeCode="6f1c2a4e-8d3b-4f7a-9c5e-2b8d4a6e1f30"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of stayline is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="stayline.ico" SourceFile="$(var.Root)\assets\stayline.ico" />
+    <Property Id="ARPPRODUCTICON" Value="stayline.ico" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- Company connection. Empty GATEWAY means none is set up. -->
+    <Property Id="CONNECTIONNAME" Value="$(var.ConnectionName)" Secure="yes" />
+    <?if $(var.Gateway) != "" ?>
+    <Property Id="GATEWAY" Value="$(var.Gateway)" Secure="yes" />
+    <?else?>
+    <Property Id="GATEWAY" Secure="yes" />
+    <?endif?>
+    <?if $(var.Pin) != "" ?>
+    <Property Id="PIN" Value="$(var.Pin)" Secure="yes" />
+    <?else?>
+    <Property Id="PIN" Secure="yes" />
+    <?endif?>
+    <?if $(var.Realm) != "" ?>
+    <Property Id="REALM" Value="$(var.Realm)" Secure="yes" />
+    <?else?>
+    <Property Id="REALM" Secure="yes" />
+    <?endif?>
+    <Property Id="USERCONNECTIONS" Value="$(var.UserConnections)" Secure="yes" />
+    <Property Id="TRUSTPROMPT" Value="$(var.TrustPrompt)" Secure="yes" />
+
+    <Feature Id="Main" Title="stayline">
+      <ComponentGroupRef Id="Program" />
+      <ComponentRef Id="StartMenu" />
+    </Feature>
+
+    <!-- Write the company connection before the service starts. -->
+    <SetProperty Id="Provision" Sequence="execute" Before="Provision"
+                 Condition="GATEWAY AND NOT REMOVE"
+                 Value="&quot;[#svc]&quot; provision --name &quot;[CONNECTIONNAME]&quot; --gateway &quot;[GATEWAY]&quot; --pin &quot;[PIN]&quot; --realm &quot;[REALM]&quot; --user-connections &quot;[USERCONNECTIONS]&quot; --trust-prompt &quot;[TRUSTPROMPT]&quot;" />
+    <CustomAction Id="Provision" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="check" />
+
+    <!-- Remove company settings on uninstall, but keep them on upgrade. -->
+    <SetProperty Id="Unprovision" Sequence="execute" Before="Unprovision"
+                 Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE"
+                 Value="&quot;[#svc]&quot; unprovision --all" />
+    <CustomAction Id="Unprovision" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="Provision" After="InstallFiles" Condition="GATEWAY AND NOT REMOVE" />
+      <Custom Action="Unprovision" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+
+    <!-- The tray app holds its files open; the VPN itself lives in the service. -->
+    <util:CloseApplication Id="CloseTray" Target="stayline-tray.exe" CloseMessage="yes"
+                           RebootPrompt="no" TerminateProcess="0" Timeout="5" />
+
+    <!-- Welcome, progress, finish with "Start stayline now"; no licence page. -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Start stayline now" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <CustomAction Id="LaunchStayline" FileRef="tray" ExeCommand="" Return="asyncNoWait" />
+    <UI Id="StaylineUI">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Segoe UI" Size="9" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Segoe UI" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Segoe UI" Size="9" Bold="yes" />
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+      <DialogRef Id="WelcomeDlg" />
+
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="EndDialog" Value="Return" Order="2" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchStayline"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" Order="1" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+    </UI>
+    <UIRef Id="WixUI_Common" />
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="stayline" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="Program" Directory="INSTALLFOLDER">
+      <Component Id="Service">
+        <File Id="svc" Source="$(var.Bin)\stayline-svc.exe" KeyPath="yes" />
+        <ServiceInstall Id="ServiceInstall" Name="stayline" DisplayName="stayline VPN"
+                        Description="Keeps the stayline VPN tunnel connected and reconnects it after network changes and sleep."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Vital="yes">
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart" RestartServiceDelayInSeconds="5"
+                              ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <ServiceControl Id="ServiceControl" Name="stayline" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+      <Component Id="App">
+        <File Id="tray" Source="$(var.Bin)\stayline-tray.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="Wintun">
+        <File Id="wintun" Source="$(var.Bin)\wintun.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Notices">
+        <File Id="notices" Source="$(var.Root)\THIRD-PARTY-NOTICES.html" KeyPath="yes" />
+      </Component>
+      <Component Id="RunAtSignIn">
+        <!-- The app exits right away for users who turned this off. -->
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="stayline"
+                       Type="string" Value="&quot;[#tray]&quot; --background" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenu">
+        <!-- The app ID makes notifications appear as "stayline". -->
+        <Shortcut Id="StartMenuShortcut" Name="stayline" Description="FortiGate SSL-VPN that stays connected"
+                  Target="[#tray]" WorkingDirectory="INSTALLFOLDER" Icon="stayline.ico">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="Stayline.App" />
+        </Shortcut>
+        <RegistryValue Root="HKLM" Key="Software\stayline" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+  </Fragment>
+</Wix>
