@@ -76,6 +76,42 @@ impl Settings {
     }
 }
 
+/// Checks what the user typed in the connection form. Returns the cleaned
+/// gateway and pin, or a message to show next to the form.
+pub fn validate(
+    gateway: &str,
+    username: &str,
+    pin: &str,
+) -> Result<(String, Option<String>), String> {
+    let gateway = gateway.trim();
+    if gateway.is_empty() {
+        return Err("Enter the gateway address.".into());
+    }
+    if gateway.chars().any(char::is_whitespace) {
+        return Err("The gateway address cannot contain spaces.".into());
+    }
+    if gateway.contains("://") && !gateway.to_ascii_lowercase().starts_with("https://") {
+        return Err("The gateway address must use https://.".into());
+    }
+    if username.trim().is_empty() {
+        return Err("Enter your username.".into());
+    }
+    let pin: String = pin
+        .chars()
+        .filter(|c| *c != ':' && !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if pin.is_empty() {
+        return Ok((gateway.to_owned(), None));
+    }
+    if pin.len() != 64 || !pin.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(
+            "The certificate fingerprint must be 64 hexadecimal characters (SHA-256).".into(),
+        );
+    }
+    Ok((gateway.to_owned(), Some(pin)))
+}
+
 pub fn path() -> Result<PathBuf, SettingsError> {
     let dirs = directories::ProjectDirs::from("", "", "stayline").ok_or(SettingsError::NoHome)?;
     Ok(dirs.config_dir().join("settings.toml"))
@@ -113,6 +149,25 @@ mod tests {
         assert_eq!(s.gateway, "vpn.example.com");
         assert!(s.auto_connect);
         assert!(!s.is_complete());
+    }
+
+    #[test]
+    fn validate_accepts_good_input_and_normalises_pin() {
+        let pin = "AB:".repeat(31) + "AB";
+        let (gw, p) = validate(" 203.0.113.10:10443 ", "alice", &pin).unwrap();
+        assert_eq!(gw, "203.0.113.10:10443");
+        assert_eq!(p, Some("ab".repeat(32)));
+        assert_eq!(validate("vpn.example.com", "a", "").unwrap().1, None);
+    }
+
+    #[test]
+    fn validate_rejects_bad_input() {
+        assert!(validate("", "alice", "").is_err());
+        assert!(validate("vpn example.com", "alice", "").is_err());
+        assert!(validate("http://vpn.example.com", "alice", "").is_err());
+        assert!(validate("vpn.example.com", " ", "").is_err());
+        assert!(validate("vpn.example.com", "alice", "abcd").is_err());
+        assert!(validate("vpn.example.com", "alice", &"zz".repeat(32)).is_err());
     }
 
     #[test]

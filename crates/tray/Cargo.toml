@@ -22,11 +22,23 @@ zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 tray-icon.workspace = true
-muda.workspace = true
 tauri-winrt-notification.workspace = true
+auto-launch.workspace = true
+# Software renderer only: no GPU stack keeps memory use low.
+slint = { workspace = true, default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "backend-winit",
+    "renderer-software",
+    "accessibility",
+] }
 windows = { workspace = true, features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Security_Cryptography",
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(windows)'.build-dependencies]
+slint-build.workspace = true

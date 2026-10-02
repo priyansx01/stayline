@@ -2,6 +2,7 @@
 
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::{Bytes, BytesMut};
@@ -15,7 +16,7 @@ use zeroize::Zeroizing;
 use crate::auth::SessionCookie;
 use crate::error::{Error, Result};
 use crate::gateway::Gateway;
-use crate::ppp::{DownReason, PppConfig, PppEvent, PppSession, frame};
+use crate::ppp::{DownReason, PROTO_IPV4, PppConfig, PppEvent, PppSession, frame};
 use crate::tls::{self, Fingerprint};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -75,6 +76,23 @@ pub fn random_magic() -> u32 {
     u32::from_ne_bytes(buf).max(1)
 }
 
+/// IP payload bytes carried by the tunnel, across reconnects.
+#[derive(Debug, Default)]
+pub struct TunnelStats {
+    pub sent: AtomicU64,
+    pub received: AtomicU64,
+}
+
+impl TunnelStats {
+    /// `(sent, received)`.
+    pub fn snapshot(&self) -> (u64, u64) {
+        (
+            self.sent.load(Ordering::Relaxed),
+            self.received.load(Ordering::Relaxed),
+        )
+    }
+}
+
 /// Why [`run`] returned.
 #[derive(Debug)]
 pub enum TunnelEnd {
@@ -97,6 +115,7 @@ pub async fn run<S, F>(
     ppp: PppConfig,
     from_device: &mut mpsc::Receiver<Bytes>,
     to_device: &mpsc::Sender<Bytes>,
+    stats: &TunnelStats,
     mut on_up: impl FnMut(Ipv4Addr, Option<Ipv4Addr>) -> bool,
     shutdown: F,
 ) -> TunnelEnd
@@ -113,6 +132,9 @@ where
 
     loop {
         while let Some((protocol, data)) = session.poll_transmit() {
+            if protocol == PROTO_IPV4 {
+                stats.sent.fetch_add(data.len() as u64, Ordering::Relaxed);
+            }
             frame::encode(protocol, &data, &mut wbuf);
         }
         if !wbuf.is_empty() {
@@ -135,6 +157,9 @@ where
                     }
                 }
                 PppEvent::Ip(packet) => {
+                    stats
+                        .received
+                        .fetch_add(packet.len() as u64, Ordering::Relaxed);
                     if to_device.try_send(packet).is_err() {
                         tracing::trace!("adapter queue full, dropping packet");
                     }
@@ -271,13 +296,16 @@ mod tests {
         let (to_device, mut dev_rx) = mpsc::channel(16);
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
         let (up_tx, mut up_rx) = mpsc::unbounded_channel();
+        let stats = std::sync::Arc::new(TunnelStats::default());
 
+        let tunnel_stats = stats.clone();
         let tunnel = tokio::spawn(async move {
             run(
                 client,
                 PppConfig::new(0xabcd, None),
                 &mut from_device,
                 &to_device,
+                &tunnel_stats,
                 move |local, peer| up_tx.send((local, peer)).is_ok(),
                 async {
                     stop_rx.await.ok();
@@ -291,6 +319,7 @@ mod tests {
         let ping = Bytes::from_static(&[0x45, 0, 0, 20, 1, 2, 3, 4]);
         dev_tx.send(ping.clone()).await.unwrap();
         assert_eq!(dev_rx.recv().await, Some(ping));
+        assert_eq!(stats.snapshot(), (8, 8));
 
         stop_tx.send(()).unwrap();
         let end = tunnel.await.unwrap();
@@ -314,6 +343,7 @@ mod tests {
             PppConfig::new(1, None),
             &mut from_device,
             &to_device,
+            &TunnelStats::default(),
             |_, _| true,
             std::future::pending(),
         )

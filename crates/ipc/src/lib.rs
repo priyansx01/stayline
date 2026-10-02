@@ -39,6 +39,10 @@ pub enum Request {
         password: Zeroizing<String>,
     },
     Disconnect,
+    /// Fetch the gateway's certificate so the user can decide to pin it.
+    InspectCertificate {
+        gateway: String,
+    },
 }
 
 impl std::fmt::Debug for Request {
@@ -50,6 +54,10 @@ impl std::fmt::Debug for Request {
                 .field("password", &"<redacted>")
                 .finish(),
             Request::Disconnect => f.write_str("Disconnect"),
+            Request::InspectCertificate { gateway } => f
+                .debug_struct("InspectCertificate")
+                .field("gateway", gateway)
+                .finish(),
         }
     }
 }
@@ -63,6 +71,9 @@ pub enum TunnelState {
     },
     Connected {
         local_ip: String,
+        /// When the tunnel came up, in seconds since the Unix epoch.
+        #[serde(default)]
+        since_unix: u64,
     },
     Reconnecting {
         attempt: u32,
@@ -84,6 +95,24 @@ pub enum Event {
     Rejected {
         reason: String,
     },
+    /// Bytes carried by the tunnel; sent every few seconds while connected.
+    Stats {
+        sent: u64,
+        received: u64,
+    },
+    /// Answer to [`Request::InspectCertificate`].
+    Certificate(CertificateReport),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CertificateReport {
+    pub gateway: String,
+    /// SHA-256 fingerprint, if the gateway could be reached.
+    pub fingerprint: Option<String>,
+    /// Whether the certificate chains to a public CA and matches the host.
+    pub publicly_trusted: bool,
+    /// Why it is not publicly trusted, or why it could not be fetched.
+    pub problem: Option<String>,
 }
 
 /// Writes one message as a line of JSON.
@@ -180,11 +209,12 @@ mod tests {
     fn wire_format_is_tagged_json() {
         let json = serde_json::to_string(&Event::Status(TunnelState::Connected {
             local_ip: "10.0.0.5".into(),
+            since_unix: 1_790_000_000,
         }))
         .unwrap();
         assert_eq!(
             json,
-            r#"{"type":"status","state":"connected","local_ip":"10.0.0.5"}"#
+            r#"{"type":"status","state":"connected","local_ip":"10.0.0.5","since_unix":1790000000}"#
         );
     }
 

@@ -73,8 +73,16 @@ async fn run(notify: Notify, mut requests: mpsc::UnboundedReceiver<Request>) {
             let notify = notify.clone();
             async move {
                 let mut reader = BufReader::new(reader);
-                while let Ok(Some(event)) = read_message::<_, Event>(&mut reader).await {
-                    notify(FromService::Event(event));
+                loop {
+                    match read_message::<_, Event>(&mut reader).await {
+                        Ok(Some(event)) => notify(FromService::Event(event)),
+                        // A message this version does not understand (e.g.
+                        // from a newer service): skip it, keep the link.
+                        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                            tracing::warn!(error = %e, "ignoring unreadable message from service");
+                        }
+                        Ok(None) | Err(_) => break,
+                    }
                 }
             }
         });

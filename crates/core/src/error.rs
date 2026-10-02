@@ -11,10 +11,10 @@ pub enum Error {
     Tls(#[from] rustls::Error),
 
     #[error("HTTP request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(reqwest::Error),
 
     #[error("network error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(std::io::Error),
 
     #[error("username or password was rejected")]
     BadCredentials,
@@ -38,6 +38,16 @@ pub enum Error {
 
     #[error("could not parse tunnel configuration: {0}")]
     ConfigParse(String),
+
+    #[error(
+        "the gateway's certificate changed (now {actual}, pinned {expected}); this can mean the connection is being intercepted, so check with IT before trusting it"
+    )]
+    CertificateChanged { expected: String, actual: String },
+
+    #[error(
+        "the gateway's certificate is not trusted ({0}); check its fingerprint with IT and pin it"
+    )]
+    CertificateUntrusted(String),
 
     #[error("tunnel protocol error: {0}")]
     Protocol(String),
@@ -68,7 +78,21 @@ impl Error {
                 | Error::SamlRequired
                 | Error::InvalidGateway(_)
                 | Error::InvalidFingerprint
+                | Error::CertificateChanged { .. }
+                | Error::CertificateUntrusted(_)
         )
+    }
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(e: reqwest::Error) -> Self {
+        crate::tls::certificate_error(&e).unwrap_or(Error::Http(e))
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        crate::tls::certificate_error(&e).unwrap_or(Error::Io(e))
     }
 }
 

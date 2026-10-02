@@ -4,7 +4,7 @@
 use std::net::Ipv4Addr;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use tokio::sync::{mpsc, watch};
@@ -16,7 +16,7 @@ use crate::error::{Error, Result};
 use crate::gateway::Gateway;
 use crate::ppp::{DownReason, PppConfig};
 use crate::tls::Fingerprint;
-use crate::tunnel::{self, TunnelEnd};
+use crate::tunnel::{self, TunnelEnd, TunnelStats};
 
 /// Pause after a network change before retrying, so DHCP and routes settle.
 const NETWORK_SETTLE: Duration = Duration::from_secs(1);
@@ -76,6 +76,7 @@ pub enum Status {
     },
     Connected {
         local_ip: Ipv4Addr,
+        since: SystemTime,
     },
     Reconnecting {
         attempt: u32,
@@ -146,6 +147,7 @@ pub struct SupervisorIo<'a> {
     /// Network changes and resume from sleep.
     pub network_changed: &'a mut mpsc::UnboundedReceiver<NetEvent>,
     pub status: &'a watch::Sender<Status>,
+    pub stats: &'a TunnelStats,
     /// Becomes `true` to stop. Dropping the sender also stops.
     pub shutdown: watch::Receiver<bool>,
 }
@@ -321,11 +323,15 @@ async fn connect_once(
         ppp,
         io.from_device,
         io.to_device,
+        io.stats,
         |local_ip, _peer| match hooks.link_up(local_ip, &tunnel_cfg) {
             Ok(()) => {
                 tracing::info!(%local_ip, "tunnel up");
                 was_up.store(true, Ordering::Relaxed);
-                io.status.send_replace(Status::Connected { local_ip });
+                io.status.send_replace(Status::Connected {
+                    local_ip,
+                    since: SystemTime::now(),
+                });
                 true
             }
             Err(e) => {

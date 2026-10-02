@@ -3,12 +3,15 @@
 use std::sync::Arc;
 
 use stayline_ipc::security::PipeSecurity;
-use stayline_ipc::{Event, PIPE_NAME, Request, read_message, write_message};
+use stayline_ipc::{Event, PIPE_NAME, Request, TunnelState, read_message, write_message};
 use tokio::io::BufReader;
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use tokio::sync::{mpsc, watch};
 
-use crate::controller::Controller;
+use crate::controller::{Controller, inspect_certificate};
+
+/// How often connected clients get traffic counters.
+const STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Accepts clients until `shutdown` becomes `true`.
 pub async fn serve(
@@ -58,9 +61,10 @@ async fn handle_client(pipe: NamedPipeServer, controller: Arc<Controller>) {
                 let command = match read_message::<_, Request>(&mut reader).await {
                     Ok(Some(Request::Connect { profile, password })) => {
                         let controller = controller.clone();
-                        tokio::spawn(
-                            async move { controller.connect(profile, password).await.err() },
-                        )
+                        tokio::spawn(async move {
+                            let result = controller.connect(profile, password).await;
+                            result.err().map(|reason| Event::Rejected { reason })
+                        })
                     }
                     Ok(Some(Request::Disconnect)) => {
                         let controller = controller.clone();
@@ -69,14 +73,17 @@ async fn handle_client(pipe: NamedPipeServer, controller: Arc<Controller>) {
                             None
                         })
                     }
+                    Ok(Some(Request::InspectCertificate { gateway })) => tokio::spawn(async move {
+                        Some(Event::Certificate(inspect_certificate(gateway).await))
+                    }),
                     Ok(None) => break,
                     Err(e) => {
                         tracing::debug!(error = %e, "bad message from client");
                         break;
                     }
                 };
-                if let Ok(Some(reason)) = command.await {
-                    let _ = reply_tx.send(Event::Rejected { reason });
+                if let Ok(Some(reply)) = command.await {
+                    let _ = reply_tx.send(reply);
                 }
             }
         }
@@ -87,12 +94,20 @@ async fn handle_client(pipe: NamedPipeServer, controller: Arc<Controller>) {
         .await
         .is_ok()
     {
+        let mut stats_tick = tokio::time::interval(STATS_INTERVAL);
         loop {
             let event = tokio::select! {
                 changed = state.changed() => match changed {
                     Ok(()) => Event::Status(state.borrow_and_update().clone()),
                     Err(_) => break,
                 },
+                _ = stats_tick.tick() => {
+                    if !matches!(*state.borrow(), TunnelState::Connected { .. }) {
+                        continue;
+                    }
+                    let (sent, received) = controller.stats();
+                    Event::Stats { sent, received }
+                }
                 reply = replies.recv() => match reply {
                     Some(reply) => reply,
                     // The reader finished: the client went away.

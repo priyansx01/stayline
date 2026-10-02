@@ -1,83 +1,114 @@
-//! Tray icon, menu and the Win32 message loop.
+//! The tray app: tray icon, main window and the link to the service.
+//!
+//! Everything runs on Slint's event loop on the main thread. Other threads
+//! (service client, tray and menu events, a second launch) hand work over
+//! with `slint::invoke_from_event_loop`. The window is created when opened
+//! and dropped when closed, so an idle tray uses little memory.
 
-use std::sync::mpsc as std_mpsc;
+use std::cell::RefCell;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use stayline_ipc::{Event, Request, TunnelState};
-use stayline_tray::secret;
+use slint::{ComponentHandle, Timer, TimerMode};
+use stayline_ipc::{CertificateReport, Event, Request, TunnelState};
 use stayline_tray::settings::{self, Settings};
+use stayline_tray::{format, secret};
 use tauri_winrt_notification::Toast;
 use tokio::sync::mpsc;
-use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
-use tray_icon::{TrayIcon, TrayIconBuilder};
-use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, LPARAM, WPARAM};
-use windows::Win32::System::Threading::{CreateMutexW, GetCurrentThreadId};
-use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_APP,
-};
-use windows::core::w;
+use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use zeroize::Zeroizing;
 
 use crate::client::{self, FromService};
 use crate::icons::{self, Light};
+use crate::{autostart, instance};
 
-enum UiMessage {
-    Menu(MenuId),
-    Service(FromService),
+slint::include_modules!();
+
+const TAB_STATUS: i32 = 0;
+const TAB_CONNECTION: i32 = 1;
+const SERVICE_WARNING_DELAY: Duration = Duration::from_secs(5);
+
+thread_local! {
+    static APP: RefCell<Option<App>> = const { RefCell::new(None) };
+}
+
+/// Runs `f` on the app. If the app is busy (a callback fired while it was
+/// already borrowed), `f` runs right after instead.
+fn with_app(f: impl FnOnce(&mut App) + 'static) {
+    APP.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut app) => {
+            if let Some(app) = app.as_mut() {
+                f(app);
+            }
+        }
+        Err(_) => Timer::single_shot(Duration::ZERO, move || with_app(f)),
+    });
+}
+
+/// Same as [`with_app`], from any thread.
+fn post(f: impl FnOnce(&mut App) + Send + 'static) {
+    if let Err(e) = slint::invoke_from_event_loop(move || with_app(f)) {
+        tracing::warn!(error = %e, "event loop gone");
+    }
 }
 
 pub fn main() {
     let _log = init_logging();
-    if !single_instance() {
+    let background = std::env::args().any(|a| a == autostart::BACKGROUND_ARG);
+
+    let Some(show_requests) = instance::claim() else {
+        // Already running: the other instance opens its window.
+        return;
+    };
+
+    if let Err(e) = slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name("software".into())
+        .select()
+    {
+        tracing::error!(error = %e, "could not start the UI");
         return;
     }
 
-    let mut app = match App::new() {
+    let app = match App::new() {
         Ok(app) => app,
         Err(e) => {
             tracing::error!(error = %e, "could not create the tray icon");
             return;
         }
     };
+    APP.with(|cell| *cell.borrow_mut() = Some(app));
 
-    // Other threads hand messages over a channel and post WM_APP to wake
-    // this thread's message loop.
-    let thread = unsafe { GetCurrentThreadId() };
-    let wake = move || unsafe {
-        let _ = PostThreadMessageW(thread, WM_APP, WPARAM(0), LPARAM(0));
-    };
-    let (ui_tx, ui_rx) = std_mpsc::channel::<UiMessage>();
-    MenuEvent::set_event_handler(Some({
-        let ui_tx = ui_tx.clone();
-        move |event: MenuEvent| {
-            let _ = ui_tx.send(UiMessage::Menu(event.id));
-            wake();
+    MenuEvent::set_event_handler(Some(|event: MenuEvent| {
+        let id = event.id.0.clone();
+        post(move |app| app.on_menu(&id));
+    }));
+    TrayIconEvent::set_event_handler(Some(|event: TrayIconEvent| {
+        if let TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        } = event
+        {
+            post(|app| app.show_window(None));
         }
     }));
-    app.requests = Some(client::start(move |message| {
-        let _ = ui_tx.send(UiMessage::Service(message));
-        wake();
-    }));
+    let requests = client::start(|message| post(move |app| app.on_service(message)));
+    instance::on_show_request(show_requests, || post(|app| app.show_window(None)));
 
-    let mut msg = MSG::default();
-    loop {
-        // SAFETY: msg is a valid MSG; 0 means WM_QUIT, -1 an error.
-        let got = unsafe { GetMessageW(&mut msg, None, 0, 0) };
-        if got.0 <= 0 {
-            break;
+    with_app(move |app| {
+        app.requests = Some(requests);
+        if !background {
+            let tab =
+                (!Settings::load().unwrap_or_default().is_complete()).then_some(TAB_CONNECTION);
+            app.show_window(tab);
         }
-        if msg.hwnd.0.is_null() && msg.message == WM_APP {
-            while let Ok(message) = ui_rx.try_recv() {
-                if !app.handle(message) {
-                    return;
-                }
-            }
-            continue;
-        }
-        // SAFETY: msg was filled by GetMessageW.
-        unsafe {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
+    });
+
+    if let Err(e) = slint::run_event_loop_until_quit() {
+        tracing::error!(error = %e, "event loop failed");
     }
+    APP.with(|cell| cell.borrow_mut().take());
 }
 
 /// Menu items whose text or enabled state changes.
@@ -85,7 +116,6 @@ struct Items {
     status: MenuItem,
     connect: MenuItem,
     disconnect: MenuItem,
-    forget: MenuItem,
 }
 
 struct App {
@@ -94,10 +124,22 @@ struct App {
     requests: Option<mpsc::UnboundedSender<Request>>,
     state: TunnelState,
     service_up: bool,
+    stats: (u64, u64),
     /// Auto-connect is tried once per launch, on the first status received.
     auto_connect_checked: bool,
+    /// The user asked to be connected (and has not disconnected since).
+    wants_connected: bool,
+    /// Set when the pipe to the service (re)opens; the next status tells
+    /// whether a restarted service lost the tunnel.
+    resync_on_status: bool,
     service_warned: bool,
     last_alert: Option<String>,
+    /// Password typed with "Save password" off; kept for this session only.
+    session_password: Option<Zeroizing<String>>,
+    window: Option<AppWindow>,
+    clock: Timer,
+    cert_checking: bool,
+    cert: Option<CertificateReport>,
 }
 
 impl App {
@@ -106,23 +148,21 @@ impl App {
             status: MenuItem::with_id("status", "stayline: starting", false, None),
             connect: MenuItem::with_id("connect", "Connect", false, None),
             disconnect: MenuItem::with_id("disconnect", "Disconnect", false, None),
-            forget: MenuItem::with_id("forget", "Forget saved password", secret::is_saved(), None),
         };
         let menu = Menu::new();
         menu.append_items(&[
-            &items.status,
+            &MenuItem::with_id("open", "Open stayline", true, None),
             &PredefinedMenuItem::separator(),
+            &items.status,
             &items.connect,
             &items.disconnect,
             &PredefinedMenuItem::separator(),
-            &MenuItem::with_id("settings", "Edit settings…", true, None),
-            &items.forget,
-            &PredefinedMenuItem::separator(),
-            &MenuItem::with_id("quit", "Quit tray (VPN stays up)", true, None),
+            &MenuItem::with_id("quit", "Quit (VPN stays connected)", true, None),
         ])?;
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_icon(icons::icon(Light::Off))
+            .with_menu_on_left_click(false)
+            .with_icon(icons::tray_icon(Light::Off))
             .with_tooltip("stayline")
             .build()?;
         Ok(Self {
@@ -131,91 +171,272 @@ impl App {
             requests: None,
             state: TunnelState::Disconnected,
             service_up: false,
+            stats: (0, 0),
             auto_connect_checked: false,
+            wants_connected: false,
+            resync_on_status: false,
             service_warned: false,
             last_alert: None,
+            session_password: None,
+            window: None,
+            clock: Timer::default(),
+            cert_checking: false,
+            cert: None,
         })
     }
 
-    /// Returns `false` to quit.
-    fn handle(&mut self, message: UiMessage) -> bool {
-        match message {
-            UiMessage::Menu(id) => match id.as_ref() {
-                "connect" => self.connect(),
-                "disconnect" => self.send(Request::Disconnect),
-                "settings" => open_settings(),
-                "forget" => match secret::forget() {
-                    Ok(()) => toast("Saved password removed."),
-                    Err(e) => toast(&e.to_string()),
-                },
-                "quit" => return false,
-                _ => {}
-            },
-            UiMessage::Service(FromService::Available) => {
-                self.service_up = true;
-                self.service_warned = false;
+    // ---- events -------------------------------------------------------
+
+    fn on_menu(&mut self, id: &str) {
+        match id {
+            "open" => self.show_window(None),
+            "connect" => self.connect(),
+            "disconnect" => self.disconnect(),
+            "quit" => {
+                self.window = None;
+                let _ = slint::quit_event_loop();
             }
-            UiMessage::Service(FromService::Unavailable) => {
+            _ => {}
+        }
+    }
+
+    fn on_service(&mut self, message: FromService) {
+        match message {
+            FromService::Available => {
+                self.service_up = true;
+                self.resync_on_status = true;
+            }
+            FromService::Unavailable => {
                 self.service_up = false;
+                self.cert_checking = false;
+                // Only warn if it stays unreachable, so a service restart
+                // does not produce a notification.
                 if !self.service_warned {
-                    self.service_warned = true;
-                    toast("The stayline service is not running.");
+                    Timer::single_shot(SERVICE_WARNING_DELAY, || {
+                        with_app(|app| {
+                            if !app.service_up && !app.service_warned {
+                                app.service_warned = true;
+                                toast(
+                                    "The stayline service is not running. Reinstall stayline or ask IT.",
+                                );
+                            }
+                        })
+                    });
                 }
             }
-            UiMessage::Service(FromService::Event(Event::Status(state))) => {
+            FromService::Event(Event::Status(state)) => {
+                self.service_warned = false;
                 self.on_state(state);
             }
-            UiMessage::Service(FromService::Event(Event::Rejected { reason })) => {
-                toast(&format!("Could not connect: {reason}"));
+            FromService::Event(Event::Stats { sent, received }) => self.stats = (sent, received),
+            FromService::Event(Event::Rejected { reason }) => {
+                self.show_window(Some(TAB_CONNECTION));
+                self.set_form_message(&reason, true);
             }
+            FromService::Event(Event::Certificate(report)) => self.on_certificate(report),
         }
         self.refresh();
-        true
     }
 
     fn on_state(&mut self, state: TunnelState) {
         if let TunnelState::NeedsUser { reason } = &state
             && self.last_alert.as_ref() != Some(reason)
         {
-            toast(&format!("VPN needs attention: {reason}"));
             self.last_alert = Some(reason.clone());
+            toast(&format!("VPN needs your attention: {reason}"));
+            self.show_window(Some(TAB_CONNECTION));
+            self.set_form_message(reason, true);
         }
         if matches!(state, TunnelState::Connected { .. }) {
             self.last_alert = None;
         }
+        if !matches!(state, TunnelState::Connected { .. }) {
+            self.stats = (0, 0);
+        }
+
+        if matches!(state, TunnelState::NeedsUser { .. }) {
+            self.wants_connected = false;
+        }
 
         let first = !self.auto_connect_checked;
         self.auto_connect_checked = true;
+        let after_service_restart = std::mem::take(&mut self.resync_on_status);
         self.state = state;
-        if first && self.state == TunnelState::Disconnected {
+        if self.state != TunnelState::Disconnected {
+            return;
+        }
+        if first {
             let settings = Settings::load().unwrap_or_default();
             if settings.auto_connect && settings.is_complete() && secret::is_saved() {
                 tracing::info!("auto-connecting");
                 self.connect();
             }
+        } else if after_service_restart && self.wants_connected {
+            // The service restarted (update or crash) and lost the tunnel the
+            // user asked for: bring it back.
+            tracing::info!("service restarted, reconnecting");
+            self.connect();
         }
     }
 
-    fn connect(&mut self) {
-        let settings = match Settings::load() {
-            Ok(s) if s.is_complete() => s,
-            Ok(_) => {
-                toast("Set the gateway and username first.");
-                open_settings();
-                return;
+    fn disconnect(&mut self) {
+        self.wants_connected = false;
+        self.send(Request::Disconnect);
+    }
+
+    fn on_certificate(&mut self, report: CertificateReport) {
+        self.cert_checking = false;
+        let text = match (&report.fingerprint, report.publicly_trusted) {
+            (Some(_), true) => "The certificate is publicly trusted; no pin is needed.".to_owned(),
+            (Some(fp), false) => {
+                let pinned = self
+                    .window
+                    .as_ref()
+                    .and_then(|w| settings::validate("x", "x", &w.get_pin()).ok())
+                    .and_then(|(_, pin)| pin);
+                let reason = plain_certificate_problem(report.problem.as_deref().unwrap_or(""));
+                if pinned.as_deref() == Some(fp.as_str()) {
+                    format!(
+                        "Not publicly trusted ({reason}), but it matches the pinned fingerprint.\nSHA-256: {fp}"
+                    )
+                } else {
+                    format!(
+                        "Not publicly trusted ({reason}).\nSHA-256: {fp}\nConfirm this fingerprint with IT before trusting it."
+                    )
+                }
             }
+            (None, _) => report
+                .problem
+                .clone()
+                .unwrap_or_else(|| "Could not check the certificate.".into()),
+        };
+        if let Some(w) = &self.window {
+            w.set_cert_result(text.into());
+            w.set_cert_fingerprint(report.fingerprint.clone().unwrap_or_default().into());
+            w.set_cert_public(report.publicly_trusted);
+        }
+        self.cert = Some(report);
+    }
+
+    // ---- actions ------------------------------------------------------
+
+    fn connect(&mut self) {
+        let settings = Settings::load().unwrap_or_default();
+        if !settings.is_complete() {
+            self.show_window(Some(TAB_CONNECTION));
+            self.set_form_message("Enter the gateway and your username first.", true);
+            return;
+        }
+        let password = match secret::load() {
+            Ok(Some(saved)) => Some(saved),
+            Ok(None) => self.session_password.clone(),
             Err(e) => {
-                toast(&e.to_string());
-                return;
+                tracing::warn!(error = %e, "saved password unreadable");
+                self.session_password.clone()
             }
         };
-        match secret::load() {
-            Ok(Some(password)) => self.send(Request::Connect {
-                profile: settings.profile(),
-                password,
-            }),
-            Ok(None) => toast("No saved password yet. Save one with: stayline-probe save-login"),
-            Err(e) => toast(&e.to_string()),
+        let Some(password) = password else {
+            self.show_window(Some(TAB_CONNECTION));
+            self.set_form_message("Enter your password, then choose Save and connect.", true);
+            return;
+        };
+        self.last_alert = None;
+        self.wants_connected = true;
+        self.send(Request::Connect {
+            profile: settings.profile(),
+            password,
+        });
+    }
+
+    /// Saves the connection form. Returns `false` if it is invalid.
+    fn save_form(&mut self) -> bool {
+        let Some(w) = &self.window else { return false };
+        let (gateway, pin) =
+            match settings::validate(&w.get_gateway(), &w.get_username(), &w.get_pin()) {
+                Ok(valid) => valid,
+                Err(message) => {
+                    self.set_form_message(&message, true);
+                    return false;
+                }
+            };
+        let password = Zeroizing::new(w.get_password().to_string());
+        let save_password = w.get_save_password();
+
+        let mut settings = Settings::load().unwrap_or_default();
+        settings.gateway = gateway;
+        settings.username = w.get_username().trim().to_owned();
+        settings.realm = Some(w.get_realm().trim().to_owned()).filter(|r| !r.is_empty());
+        settings.pin = pin.clone();
+        if let Err(e) = settings.save() {
+            self.set_form_message(&e.to_string(), true);
+            return false;
+        }
+
+        let result = if save_password {
+            if password.is_empty() {
+                Ok(())
+            } else {
+                self.session_password = None;
+                secret::save(&password)
+            }
+        } else {
+            if !password.is_empty() {
+                self.session_password = Some(password.clone());
+            }
+            secret::forget()
+        };
+        if let Err(e) = result {
+            self.set_form_message(&e.to_string(), true);
+            return false;
+        }
+
+        w.set_password("".into());
+        w.set_pin(pin.unwrap_or_default().into());
+        w.set_password_saved(secret::is_saved());
+        self.set_form_message("Settings saved.", false);
+        true
+    }
+
+    fn check_certificate(&mut self) {
+        let Some(w) = &self.window else { return };
+        let gateway = w.get_gateway().trim().to_owned();
+        if gateway.is_empty() {
+            return;
+        }
+        if !self.service_up {
+            w.set_cert_result("The stayline service is not running.".into());
+            return;
+        }
+        self.cert_checking = true;
+        w.set_cert_result("".into());
+        w.set_cert_fingerprint("".into());
+        self.send(Request::InspectCertificate { gateway });
+        self.refresh();
+    }
+
+    fn trust_certificate(&mut self) {
+        let Some(fp) = self.cert.as_ref().and_then(|c| c.fingerprint.clone()) else {
+            return;
+        };
+        if let Some(w) = &self.window {
+            w.set_pin(fp.into());
+        }
+        self.set_form_message("Certificate pinned. Choose Save to keep it.", false);
+    }
+
+    fn preferences_changed(&mut self) {
+        let Some(w) = &self.window else { return };
+        let mut settings = Settings::load().unwrap_or_default();
+        settings.auto_connect = w.get_auto_connect();
+        if let Err(e) = settings.save() {
+            toast(&e.to_string());
+        }
+        let want = w.get_start_at_login();
+        if want != autostart::is_enabled()
+            && let Err(e) = autostart::set(want)
+        {
+            toast(&e);
+            w.set_start_at_login(autostart::is_enabled());
         }
     }
 
@@ -225,39 +446,228 @@ impl App {
         }
     }
 
+    // ---- window -------------------------------------------------------
+
+    fn show_window(&mut self, tab: Option<i32>) {
+        if self.window.is_none() {
+            match self.create_window() {
+                Ok(w) => self.window = Some(w),
+                Err(e) => {
+                    tracing::error!(error = %e, "could not open the window");
+                    return;
+                }
+            }
+            self.clock
+                .start(TimerMode::Repeated, Duration::from_secs(1), || {
+                    with_app(|app| app.refresh_window())
+                });
+        }
+        if let Some(w) = &self.window {
+            if let Some(tab) = tab {
+                w.set_current_tab(tab);
+            }
+            if let Err(e) = w.show() {
+                tracing::error!(error = %e, "could not show the window");
+            }
+            w.window().set_minimized(false);
+        }
+        self.refresh();
+    }
+
+    fn create_window(&self) -> Result<AppWindow, slint::PlatformError> {
+        let w = AppWindow::new()?;
+        w.set_version(env!("CARGO_PKG_VERSION").into());
+
+        let settings = Settings::load().unwrap_or_default();
+        w.set_gateway(settings.gateway.clone().into());
+        w.set_username(settings.username.clone().into());
+        w.set_realm(settings.realm.clone().unwrap_or_default().into());
+        w.set_pin(settings.pin.clone().unwrap_or_default().into());
+        w.set_auto_connect(settings.auto_connect);
+        w.set_start_at_login(autostart::is_enabled());
+        let saved = secret::is_saved();
+        w.set_password_saved(saved);
+        w.set_save_password(saved || self.session_password.is_none());
+
+        w.on_connect(|| with_app(|app| app.connect()));
+        w.on_disconnect(|| with_app(|app| app.disconnect()));
+        w.on_save_settings(|| {
+            with_app(|app| {
+                app.save_form();
+            })
+        });
+        w.on_save_and_connect(|| {
+            with_app(|app| {
+                if app.save_form() {
+                    if let Some(w) = &app.window {
+                        w.set_current_tab(TAB_STATUS);
+                    }
+                    app.connect();
+                }
+            })
+        });
+        w.on_check_certificate(|| with_app(|app| app.check_certificate()));
+        w.on_trust_certificate(|| with_app(|app| app.trust_certificate()));
+        w.on_preferences_changed(|| with_app(|app| app.preferences_changed()));
+        w.on_open_logs(open_logs);
+        w.window().on_close_requested(|| {
+            // Drop the window once this callback has returned.
+            Timer::single_shot(Duration::ZERO, || {
+                with_app(|app| {
+                    app.window = None;
+                    app.clock.stop();
+                })
+            });
+            slint::CloseRequestResponse::HideWindow
+        });
+        Ok(w)
+    }
+
+    fn set_form_message(&self, text: &str, error: bool) {
+        if let Some(w) = &self.window {
+            w.set_form_error(if error { text.into() } else { "".into() });
+            w.set_form_info(if error { "".into() } else { text.into() });
+        }
+    }
+
+    /// Updates the tray and, if open, the window.
     fn refresh(&self) {
-        let (light, text) = if !self.service_up {
-            (Light::Alert, "Service not running".to_owned())
-        } else {
-            describe(&self.state)
-        };
-        let _ = self.tray.set_icon(Some(icons::icon(light)));
+        let (light, text) = self.describe();
+        let _ = self.tray.set_icon(Some(icons::tray_icon(light)));
         let tooltip: String = format!("stayline: {text}").chars().take(120).collect();
         let _ = self.tray.set_tooltip(Some(tooltip));
-        self.items.status.set_text(format!("stayline: {text}"));
+        self.items.status.set_text(format!("Status: {text}"));
+        self.items.connect.set_enabled(self.can_connect());
+        self.items.disconnect.set_enabled(self.can_disconnect());
+        self.refresh_window();
+    }
 
-        let idle = matches!(
-            self.state,
-            TunnelState::Disconnected | TunnelState::NeedsUser { .. }
+    fn refresh_window(&self) {
+        let Some(w) = &self.window else { return };
+        let (light, title) = self.describe();
+        w.set_app_icon(icons::window_icon(light));
+        w.set_state_kind(light.kind());
+        w.set_state_title(title.into());
+        w.set_state_detail(self.detail().into());
+        w.set_needs_attention(matches!(self.state, TunnelState::NeedsUser { .. }));
+        w.set_can_connect(self.can_connect());
+        w.set_can_disconnect(self.can_disconnect());
+        w.set_cert_checking(self.cert_checking);
+        w.set_gateway_display(
+            Settings::load()
+                .map(|s| s.gateway)
+                .unwrap_or_default()
+                .into(),
         );
-        self.items.connect.set_enabled(self.service_up && idle);
-        self.items
-            .disconnect
-            .set_enabled(self.service_up && self.state != TunnelState::Disconnected);
-        self.items.forget.set_enabled(secret::is_saved());
+        w.set_service_status(
+            if self.service_up {
+                "Running"
+            } else {
+                "Not running"
+            }
+            .into(),
+        );
+
+        if let TunnelState::Connected {
+            local_ip,
+            since_unix,
+        } = &self.state
+        {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            w.set_tunnel_ip(local_ip.clone().into());
+            w.set_connected_for(format::duration(now.saturating_sub(*since_unix)).into());
+            w.set_sent(format::bytes(self.stats.0).into());
+            w.set_received(format::bytes(self.stats.1).into());
+        } else {
+            for setter in [
+                AppWindow::set_tunnel_ip,
+                AppWindow::set_connected_for,
+                AppWindow::set_sent,
+                AppWindow::set_received,
+            ] {
+                setter(w, "–".into());
+            }
+        }
+    }
+
+    fn can_connect(&self) -> bool {
+        self.service_up
+            && matches!(
+                self.state,
+                TunnelState::Disconnected | TunnelState::NeedsUser { .. }
+            )
+    }
+
+    fn can_disconnect(&self) -> bool {
+        self.service_up
+            && !matches!(
+                self.state,
+                TunnelState::Disconnected | TunnelState::NeedsUser { .. }
+            )
+    }
+
+    fn describe(&self) -> (Light, String) {
+        if !self.service_up {
+            return (Light::Alert, "Service not running".into());
+        }
+        match &self.state {
+            TunnelState::Disconnected => (Light::Off, "Disconnected".into()),
+            TunnelState::Connecting { .. } => (Light::Busy, "Connecting…".into()),
+            TunnelState::Connected { .. } => (Light::On, "Connected".into()),
+            TunnelState::Reconnecting { .. } => (Light::Busy, "Reconnecting…".into()),
+            TunnelState::WaitingForNetwork => (Light::Busy, "Waiting for network…".into()),
+            TunnelState::NeedsUser { .. } => (Light::Alert, "Needs your attention".into()),
+        }
+    }
+
+    fn detail(&self) -> String {
+        if !self.service_up {
+            return "The stayline service is not running, so the VPN cannot connect.".into();
+        }
+        match &self.state {
+            TunnelState::Disconnected => "The VPN is off.".into(),
+            TunnelState::Connecting { attempt } if *attempt > 1 => format!("Attempt {attempt}"),
+            TunnelState::Connecting { .. } => "Logging in to the gateway.".into(),
+            TunnelState::Connected { .. } => {
+                "Your traffic to the company network goes through the VPN.".into()
+            }
+            TunnelState::Reconnecting {
+                retry_in_secs,
+                last_error,
+                ..
+            } => format!(
+                "{last_error}. Trying again in {retry_in_secs} s, or as soon as the network changes."
+            ),
+            TunnelState::WaitingForNetwork => {
+                "No network connection. stayline reconnects as soon as you are back online.".into()
+            }
+            TunnelState::NeedsUser { reason } => capitalise(reason),
+        }
     }
 }
 
-fn describe(state: &TunnelState) -> (Light, String) {
-    match state {
-        TunnelState::Disconnected => (Light::Off, "Disconnected".into()),
-        TunnelState::Connecting { .. } => (Light::Busy, "Connecting…".into()),
-        TunnelState::Connected { local_ip } => (Light::On, format!("Connected ({local_ip})")),
-        TunnelState::Reconnecting { retry_in_secs, .. } => {
-            (Light::Busy, format!("Reconnecting in {retry_in_secs} s"))
-        }
-        TunnelState::WaitingForNetwork => (Light::Busy, "Waiting for network".into()),
-        TunnelState::NeedsUser { reason } => (Light::Alert, format!("Needs attention: {reason}")),
+/// Turns rustls' certificate error text into something a user can read.
+fn plain_certificate_problem(problem: &str) -> &'static str {
+    if problem.contains("UnknownIssuer") {
+        "self-signed or issued by an unknown authority"
+    } else if problem.contains("NotValidForName") || problem.contains("not valid for name") {
+        "issued for a different name than this address"
+    } else if problem.contains("Expired") {
+        "expired"
+    } else if problem.contains("NotValidYet") {
+        "not valid yet; check the computer's clock"
+    } else {
+        "not trusted by Windows' public certificate authorities"
+    }
+}
+
+fn capitalise(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
     }
 }
 
@@ -272,29 +682,20 @@ fn toast(text: &str) {
     }
 }
 
-/// Opens settings.toml in Notepad, creating it with defaults first.
-fn open_settings() {
-    let path = match settings::path() {
-        Ok(path) => path,
-        Err(e) => return toast(&e.to_string()),
-    };
-    if !path.exists()
-        && let Err(e) = Settings::default().save()
+/// Opens the service's log folder (the tray's own logs sit in the user's
+/// local app data).
+fn open_logs() {
+    let dir = std::env::var_os("ProgramData")
+        .map(|base| std::path::Path::new(&base).join("stayline").join("logs"))
+        .filter(|dir| dir.exists())
+        .or_else(|| {
+            directories::ProjectDirs::from("", "", "stayline")
+                .map(|d| d.data_local_dir().join("logs"))
+        });
+    if let Some(dir) = dir
+        && let Err(e) = std::process::Command::new("explorer.exe").arg(&dir).spawn()
     {
-        return toast(&e.to_string());
-    }
-    if let Err(e) = std::process::Command::new("notepad.exe").arg(&path).spawn() {
-        toast(&format!("Could not open {}: {e}", path.display()));
-    }
-}
-
-/// `false` if another tray instance is already running in this session.
-fn single_instance() -> bool {
-    // SAFETY: plain Win32 call; the handle is intentionally kept open for
-    // the life of the process.
-    unsafe {
-        let created = CreateMutexW(None, true, w!("Local\\stayline-tray"));
-        created.is_ok() && GetLastError() != ERROR_ALREADY_EXISTS
+        toast(&format!("Could not open {}: {e}", dir.display()));
     }
 }
 

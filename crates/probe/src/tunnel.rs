@@ -51,6 +51,7 @@ pub async fn run(gateway: &Gateway, pin: Option<Fingerprint>, creds: &Credential
             to_device: &to_device,
             network_changed: &mut network_changed,
             status: &status_tx,
+            stats: &Default::default(),
             shutdown: stop_rx,
         },
     )
@@ -75,7 +76,7 @@ fn print_status(status: &Status) {
     match status {
         Status::Connecting { attempt } if *attempt <= 1 => println!("{now} connecting"),
         Status::Connecting { attempt } => println!("{now} connecting (attempt {attempt})"),
-        Status::Connected { local_ip } => {
+        Status::Connected { local_ip, .. } => {
             println!("{now} CONNECTED as {local_ip}  (Ctrl+C to disconnect)")
         }
         Status::Reconnecting {

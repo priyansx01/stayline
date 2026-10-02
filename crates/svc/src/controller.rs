@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex};
 use stayline_core::supervisor::{
     self, NetEvent, Status, SupervisorConfig, SupervisorEnd, SupervisorIo,
 };
+use stayline_core::tunnel::TunnelStats;
 use stayline_core::{Credentials, Fingerprint, Gateway};
-use stayline_ipc::{Profile, TunnelState};
+use stayline_ipc::{CertificateReport, Profile, TunnelState};
 use stayline_net::{DeviceChannels, NetworkWatcher, TunDevice, WindowsHooks};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -24,6 +25,8 @@ pub struct Controller {
     session: tokio::sync::Mutex<Option<Session>>,
     /// Event sender of the running session, for power events.
     events: Mutex<Option<mpsc::UnboundedSender<NetEvent>>>,
+    /// Traffic counters of the current session.
+    stats: Mutex<Arc<TunnelStats>>,
 }
 
 impl Controller {
@@ -32,11 +35,17 @@ impl Controller {
             state: watch::Sender::new(TunnelState::Disconnected),
             session: tokio::sync::Mutex::new(None),
             events: Mutex::new(None),
+            stats: Mutex::new(Arc::default()),
         })
     }
 
     pub fn subscribe(&self) -> watch::Receiver<TunnelState> {
         self.state.subscribe()
+    }
+
+    /// Bytes `(sent, received)` in the current session.
+    pub fn stats(&self) -> (u64, u64) {
+        self.stats.lock().expect("stats lock").snapshot()
     }
 
     /// Starts (or restarts with new settings) a session that keeps the
@@ -127,6 +136,8 @@ impl Controller {
             Err(e) => return self.fail(format!("could not watch for network changes: {e}")),
         };
         let hooks = WindowsHooks::new(device.luid());
+        let stats = Arc::new(TunnelStats::default());
+        *self.stats.lock().expect("stats lock") = stats.clone();
 
         let (status_tx, mut status_rx) = watch::channel(Status::Disconnected);
         let state = self.state.clone();
@@ -149,6 +160,7 @@ impl Controller {
                 to_device: &to_device,
                 network_changed: &mut events_rx,
                 status: &status_tx,
+                stats: &stats,
                 shutdown: stop,
             },
         )
@@ -173,11 +185,42 @@ impl Controller {
     }
 }
 
+/// Fetches the gateway's certificate for the user to review.
+pub async fn inspect_certificate(gateway: String) -> CertificateReport {
+    let mut report = CertificateReport {
+        gateway: gateway.clone(),
+        fingerprint: None,
+        publicly_trusted: false,
+        problem: None,
+    };
+    let parsed = match Gateway::parse(&gateway) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            report.problem = Some(e.to_string());
+            return report;
+        }
+    };
+    let inspect = stayline_core::tls::inspect_certificate(&parsed);
+    match tokio::time::timeout(std::time::Duration::from_secs(15), inspect).await {
+        Ok(Ok(info)) => {
+            report.fingerprint = Some(info.fingerprint.to_string());
+            report.publicly_trusted = info.public_ca_error.is_none();
+            report.problem = info.public_ca_error;
+        }
+        Ok(Err(e)) => report.problem = Some(format!("could not reach the gateway: {e}")),
+        Err(_) => report.problem = Some("the gateway did not answer within 15 seconds".into()),
+    }
+    report
+}
+
 fn to_ipc(status: &Status) -> TunnelState {
     match status {
         Status::Connecting { attempt } => TunnelState::Connecting { attempt: *attempt },
-        Status::Connected { local_ip } => TunnelState::Connected {
+        Status::Connected { local_ip, since } => TunnelState::Connected {
             local_ip: local_ip.to_string(),
+            since_unix: since
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
         },
         Status::Reconnecting {
             attempt,

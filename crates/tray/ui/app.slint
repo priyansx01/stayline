@@ -1,0 +1,392 @@
+import { Button, LineEdit, CheckBox, TabWidget, GroupBox, AboutSlint, Palette, ScrollView } from "std-widgets.slint";
+
+// 0 = off, 1 = busy, 2 = on, 3 = needs attention
+component StatusDot inherits Rectangle {
+    in property <int> kind;
+    width: 18px;
+    height: 18px;
+    border-radius: self.width / 2;
+    background: kind == 2 ? #23aa55 : kind == 1 ? #eba514 : kind == 3 ? #d73737 : #8c8c8c;
+}
+
+component Field inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing: 12px;
+    Text {
+        text: label;
+        width: 130px;
+        color: Palette.foreground.with-alpha(0.65);
+    }
+    Text {
+        text: value;
+        horizontal-stretch: 1;
+        overflow: elide;
+    }
+}
+
+component Labeled inherits VerticalLayout {
+    in property <string> label;
+    in property <string> hint;
+    spacing: 4px;
+    Text {
+        text: label;
+        font-weight: 600;
+    }
+    @children
+    if hint != "": Text {
+        text: hint;
+        font-size: 11px;
+        color: Palette.foreground.with-alpha(0.6);
+        wrap: word-wrap;
+    }
+}
+
+component Banner inherits Rectangle {
+    in property <string> text;
+    in property <bool> error: true;
+    background: error ? #d7373722 : #23aa5522;
+    border-color: error ? #d73737 : #23aa55;
+    border-width: 1px;
+    border-radius: 6px;
+    HorizontalLayout {
+        padding: 10px;
+        Text {
+            text: root.text;
+            wrap: word-wrap;
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "stayline";
+    icon: app-icon;
+    // Paint the whole window; areas without widgets would otherwise show
+    // whatever is behind it.
+    background: Palette.background;
+    min-width: 560px;
+    min-height: 600px;
+    preferred-width: 600px;
+    preferred-height: 660px;
+
+    in property <image> app-icon;
+    in property <string> version;
+
+    // Status
+    in property <int> state-kind;
+    in property <string> state-title: "Disconnected";
+    in property <string> state-detail;
+    in property <string> gateway-display;
+    in property <string> tunnel-ip;
+    in property <string> connected-for;
+    in property <string> sent;
+    in property <string> received;
+    in property <bool> can-connect;
+    in property <bool> can-disconnect;
+    in property <bool> needs-attention;
+
+    // Connection form
+    in-out property <string> gateway;
+    in-out property <string> username;
+    in-out property <string> password;
+    in-out property <string> realm;
+    in-out property <string> pin;
+    in-out property <bool> save-password: true;
+    in property <bool> password-saved;
+    in property <string> form-error;
+    in property <string> form-info;
+
+    // Certificate check
+    in property <bool> cert-checking;
+    in property <string> cert-result;
+    in property <string> cert-fingerprint;
+    in property <bool> cert-public;
+
+    // Preferences
+    in-out property <bool> auto-connect;
+    in-out property <bool> start-at-login;
+    in property <string> service-status;
+
+    in-out property <int> current-tab;
+
+    callback connect();
+    callback disconnect();
+    callback save-settings();
+    callback save-and-connect();
+    callback check-certificate();
+    callback trust-certificate();
+    callback preferences-changed();
+    callback open-logs();
+
+    TabWidget {
+        current-index <=> root.current-tab;
+
+        Tab {
+            title: "Status";
+            VerticalLayout {
+                padding: 20px;
+                spacing: 16px;
+                alignment: start;
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: start;
+                    StatusDot {
+                        kind: root.state-kind;
+                        y: 6px;
+                    }
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: root.state-title;
+                            font-size: 22px;
+                            font-weight: 600;
+                        }
+                        if root.state-detail != "": Text {
+                            text: root.state-detail;
+                            wrap: word-wrap;
+                            color: Palette.foreground.with-alpha(0.7);
+                        }
+                    }
+                }
+
+                if root.needs-attention: Banner {
+                    text: "stayline stopped retrying because something needs your attention. Check the Connection tab, then connect again.";
+                }
+
+                GroupBox {
+                    title: "Connection";
+                    VerticalLayout {
+                        spacing: 8px;
+                        Field {
+                            label: "Gateway";
+                            value: root.gateway-display;
+                        }
+                        Field {
+                            label: "Tunnel address";
+                            value: root.tunnel-ip;
+                        }
+                        Field {
+                            label: "Connected for";
+                            value: root.connected-for;
+                        }
+                        Field {
+                            label: "Sent";
+                            value: root.sent;
+                        }
+                        Field {
+                            label: "Received";
+                            value: root.received;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: end;
+                    Button {
+                        text: "Disconnect";
+                        enabled: root.can-disconnect;
+                        clicked => {
+                            root.disconnect();
+                        }
+                    }
+                    Button {
+                        text: "Connect";
+                        primary: true;
+                        enabled: root.can-connect;
+                        clicked => {
+                            root.connect();
+                        }
+                    }
+                }
+            }
+        }
+
+        Tab {
+            title: "Connection";
+            ScrollView {
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 14px;
+
+                    if root.form-error != "": Banner {
+                        text: root.form-error;
+                    }
+                    if root.form-info != "": Banner {
+                        text: root.form-info;
+                        error: false;
+                    }
+
+                    Labeled {
+                        label: "Gateway";
+                        hint: "Address of the FortiGate SSL-VPN, for example vpn.example.com or 203.0.113.10:10443.";
+                        LineEdit {
+                            text <=> root.gateway;
+                            placeholder-text: "vpn.example.com:10443";
+                        }
+                    }
+
+                    Labeled {
+                        label: "Username";
+                        LineEdit {
+                            text <=> root.username;
+                        }
+                    }
+
+                    Labeled {
+                        label: "Password";
+                        hint: root.password-saved ? "A password is saved. Leave this empty to keep it." : "";
+                        LineEdit {
+                            text <=> root.password;
+                            input-type: InputType.password;
+                            placeholder-text: root.password-saved ? "••••••••  (saved)" : "";
+                        }
+                    }
+
+                    CheckBox {
+                        text: "Save password (encrypted for your Windows account)";
+                        checked <=> root.save-password;
+                    }
+
+                    Labeled {
+                        label: "Realm (optional)";
+                        hint: "Only needed if your IT department gave you one.";
+                        LineEdit {
+                            text <=> root.realm;
+                        }
+                    }
+
+                    GroupBox {
+                        title: "Gateway certificate";
+                        VerticalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "If the gateway uses its own (self-signed) certificate, pin its SHA-256 fingerprint. Confirm the fingerprint with IT before trusting it.";
+                                wrap: word-wrap;
+                                font-size: 12px;
+                                color: Palette.foreground.with-alpha(0.7);
+                            }
+                            LineEdit {
+                                text <=> root.pin;
+                                placeholder-text: "SHA-256 fingerprint (leave empty for a publicly trusted certificate)";
+                                font-size: 11px;
+                            }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: start;
+                                Button {
+                                    text: root.cert-checking ? "Checking…" : "Check certificate";
+                                    enabled: !root.cert-checking && root.gateway != "";
+                                    clicked => {
+                                        root.check-certificate();
+                                    }
+                                }
+                                if root.cert-fingerprint != "" && !root.cert-public && root.cert-fingerprint != root.pin: Button {
+                                    text: "Trust this certificate";
+                                    clicked => {
+                                        root.trust-certificate();
+                                    }
+                                }
+                            }
+                            if root.cert-result != "": Text {
+                                text: root.cert-result;
+                                wrap: word-wrap;
+                                font-size: 12px;
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: end;
+                        Button {
+                            text: "Save";
+                            clicked => {
+                                root.save-settings();
+                            }
+                        }
+                        Button {
+                            text: "Save and connect";
+                            primary: true;
+                            clicked => {
+                                root.save-and-connect();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Tab {
+            title: "Preferences";
+            VerticalLayout {
+                padding: 20px;
+                spacing: 14px;
+                alignment: start;
+
+                CheckBox {
+                    text: "Connect automatically when stayline starts";
+                    checked <=> root.auto-connect;
+                    toggled => {
+                        root.preferences-changed();
+                    }
+                }
+                CheckBox {
+                    text: "Start stayline when I sign in to Windows";
+                    checked <=> root.start-at-login;
+                    toggled => {
+                        root.preferences-changed();
+                    }
+                }
+
+                GroupBox {
+                    title: "Troubleshooting";
+                    VerticalLayout {
+                        spacing: 8px;
+                        Field {
+                            label: "Service";
+                            value: root.service-status;
+                        }
+                        HorizontalLayout {
+                            alignment: start;
+                            Button {
+                                text: "Open logs folder";
+                                clicked => {
+                                    root.open-logs();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Tab {
+            title: "About";
+            VerticalLayout {
+                padding: 20px;
+                spacing: 10px;
+                alignment: start;
+                Text {
+                    text: "stayline";
+                    font-size: 22px;
+                    font-weight: 600;
+                }
+                Text {
+                    text: "Version " + root.version;
+                }
+                Text {
+                    text: "Keeps your FortiGate SSL-VPN connection up and reconnects it automatically after network changes and sleep.";
+                    wrap: word-wrap;
+                }
+                Rectangle {
+                    height: 12px;
+                }
+                AboutSlint {
+                    height: 150px;
+                }
+            }
+        }
+    }
+}

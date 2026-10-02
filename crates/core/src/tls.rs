@@ -6,7 +6,10 @@ use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, WebPkiSupportedAlgorithms};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
+use rustls::{
+    CertificateError, ClientConfig, DigitallySignedStruct, OtherError, RootCertStore,
+    SignatureScheme,
+};
 use sha2::{Digest, Sha256};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -95,6 +98,62 @@ pub fn server_name(gateway: &Gateway) -> Result<ServerName<'static>> {
     })
 }
 
+/// The gateway presented a different certificate than the pinned one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PinMismatch {
+    pub expected: Fingerprint,
+    pub actual: Fingerprint,
+}
+
+impl fmt::Display for PinMismatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "certificate fingerprint {} does not match the pinned {}",
+            self.actual, self.expected
+        )
+    }
+}
+
+impl std::error::Error for PinMismatch {}
+
+/// Finds a certificate problem anywhere in an error chain (reqwest and
+/// tokio-rustls wrap rustls errors in their own and in `io::Error`) and
+/// turns it into the matching [`Error`].
+pub(crate) fn certificate_error(err: &(dyn std::error::Error + 'static)) -> Option<Error> {
+    let mut current = err;
+    loop {
+        let rustls_err = current.downcast_ref::<rustls::Error>().or_else(|| {
+            current
+                .downcast_ref::<std::io::Error>()
+                .and_then(|io| io.get_ref())
+                .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+        });
+        if let Some(rustls::Error::InvalidCertificate(cert)) = rustls_err {
+            return Some(match cert {
+                CertificateError::Other(OtherError(other)) => {
+                    match other.downcast_ref::<PinMismatch>() {
+                        Some(m) => Error::CertificateChanged {
+                            expected: m.expected.to_string(),
+                            actual: m.actual.to_string(),
+                        },
+                        None => Error::CertificateUntrusted(other.to_string()),
+                    }
+                }
+                other => Error::CertificateUntrusted(format!("{other:?}")),
+            });
+        }
+        // io::Error::source() skips the wrapped error, so step into it.
+        current = match current
+            .downcast_ref::<std::io::Error>()
+            .and_then(|io| io.get_ref())
+        {
+            Some(inner) => inner,
+            None => current.source()?,
+        };
+    }
+}
+
 #[derive(Debug)]
 struct PinnedVerifier {
     pin: Fingerprint,
@@ -114,9 +173,11 @@ impl ServerCertVerifier for PinnedVerifier {
         if actual == self.pin {
             Ok(ServerCertVerified::assertion())
         } else {
-            Err(rustls::Error::General(format!(
-                "certificate fingerprint {actual} does not match the pinned {}",
-                self.pin
+            Err(rustls::Error::InvalidCertificate(CertificateError::Other(
+                OtherError(Arc::new(PinMismatch {
+                    expected: self.pin,
+                    actual,
+                })),
             )))
         }
     }
@@ -256,6 +317,38 @@ mod tests {
     #[test]
     fn fingerprint_rejects_wrong_length() {
         assert!("abcd".parse::<Fingerprint>().is_err());
+    }
+
+    #[test]
+    fn pin_mismatch_is_found_through_io_wrappers() {
+        let expected: Fingerprint = HEX.parse().unwrap();
+        let actual: Fingerprint = "11".repeat(32).parse().unwrap();
+        let tls_err = rustls::Error::InvalidCertificate(CertificateError::Other(OtherError(
+            Arc::new(PinMismatch { expected, actual }),
+        )));
+        let wrapped = std::io::Error::other(std::io::Error::other(tls_err));
+        match certificate_error(&wrapped) {
+            Some(Error::CertificateChanged {
+                expected: e,
+                actual: a,
+            }) => {
+                assert_eq!(e, HEX);
+                assert_eq!(a, "11".repeat(32));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_issuer_is_untrusted() {
+        let wrapped = std::io::Error::other(rustls::Error::InvalidCertificate(
+            CertificateError::UnknownIssuer,
+        ));
+        assert!(matches!(
+            certificate_error(&wrapped),
+            Some(Error::CertificateUntrusted(_))
+        ));
+        assert!(certificate_error(&std::io::Error::other("plain")).is_none());
     }
 
     #[test]
