@@ -87,7 +87,8 @@ impl GatewayRoute {
     pub fn pin(tun_luid: u64, gateway_ip: Ipv4Addr) -> Result<Self> {
         let uplink = iphlp::default_route(tun_luid);
         let (luid, next_hop) = match iphlp::best_route(gateway_ip) {
-            Ok((luid, hop)) if luid != tun_luid => (luid, hop),
+            // Windows keeps routes of disconnected interfaces, so check.
+            Ok((luid, hop)) if luid != tun_luid && iphlp::interface_connected(luid) => (luid, hop),
             // The best route goes into the tunnel (full tunnel): use the uplink.
             _ => uplink.ok_or(NetError::Offline)?,
         };

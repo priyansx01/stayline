@@ -264,7 +264,13 @@ pub fn default_route(exclude_luid: u64) -> Option<(u64, Ipv4Addr)> {
     best.map(|(_, luid, hop)| (luid, hop))
 }
 
-/// Interface metric, or `None` if the interface has no IPv4 or is gone.
+/// Whether the interface exists, has IPv4 and is connected.
+pub fn interface_connected(if_luid: u64) -> bool {
+    interface_metric(if_luid).is_some()
+}
+
+/// Interface metric, or `None` if the interface has no IPv4, is not
+/// connected or is gone.
 fn interface_metric(if_luid: u64) -> Option<u32> {
     let mut row = MaybeUninit::<MIB_IPINTERFACE_ROW>::zeroed();
     let p = row.as_mut_ptr();

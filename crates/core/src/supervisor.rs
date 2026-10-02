@@ -174,17 +174,25 @@ pub async fn supervise(
             OFFLINE_RECHECK
         };
 
-        tokio::select! {
-            () = tokio::time::sleep(retry_in) => {}
-            _ = io.shutdown.wait_for(|stop| *stop) => {
-                io.status.send_replace(Status::Disconnected);
-                return SupervisorEnd::Stopped;
-            }
-            Some(()) = io.network_changed.recv() => {
-                while io.network_changed.try_recv().is_ok() {}
-                tracing::info!("network changed, retrying now");
-                tokio::time::sleep(NETWORK_SETTLE).await;
-                backoff.reset();
+        let deadline = tokio::time::Instant::now() + retry_in;
+        loop {
+            tokio::select! {
+                () = tokio::time::sleep_until(deadline) => break,
+                _ = io.shutdown.wait_for(|stop| *stop) => {
+                    io.status.send_replace(Status::Disconnected);
+                    return SupervisorEnd::Stopped;
+                }
+                Some(()) = io.network_changed.recv() => {
+                    tokio::time::sleep(NETWORK_SETTLE).await;
+                    while io.network_changed.try_recv().is_ok() {}
+                    if hooks.network_available() {
+                        tracing::info!("network changed, retrying now");
+                        backoff.reset();
+                        break;
+                    }
+                    // Still offline (e.g. Wi-Fi just went away): keep waiting.
+                    io.status.send_replace(Status::WaitingForNetwork);
+                }
             }
         }
     }
@@ -224,9 +232,23 @@ async fn connect_once(
         let stream = tunnel::connect(gateway_ip, cfg.gateway, cfg.pin, &cookie).await?;
         Ok((cookie, tunnel_cfg, stream))
     };
-    let (cookie, tunnel_cfg, stream) = tokio::select! {
-        setup = setup => setup?,
-        _ = shutdown.wait_for(|stop| *stop) => return Ok(Ended::Stopped),
+    tokio::pin!(setup);
+    let (cookie, tunnel_cfg, stream) = loop {
+        tokio::select! {
+            setup = &mut setup => break setup?,
+            _ = shutdown.wait_for(|stop| *stop) => return Ok(Ended::Stopped),
+            // A login started on a network that just changed may hang until
+            // it times out; start over on the new one instead.
+            Some(()) = io.network_changed.recv() => {
+                while io.network_changed.try_recv().is_ok() {}
+                if hooks.gateway_path_changed() {
+                    return Ok(Ended::Dropped {
+                        was_up: false,
+                        reason: "network changed while connecting".to_owned(),
+                    });
+                }
+            }
+        }
     };
 
     let was_up = Cell::new(false);
