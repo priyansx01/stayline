@@ -63,6 +63,8 @@ async fn run(args: Vec<String>) -> Result<()> {
             let (client, cookie) = authenticate(args).await?;
             tunnel::run(&client, &gateway, pin, &cookie).await
         }
+        #[cfg(windows)]
+        Some("net-selftest") => tunnel::net_selftest(args).await,
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             Ok(())

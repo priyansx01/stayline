@@ -1,8 +1,16 @@
 //! Thin safe wrappers over the IP Helper calls stayline needs (IPv4 only).
+//!
+//! The `windows` crate maps the `BOOLEAN` fields of these rows to Rust
+//! `bool`, but Windows may store values other than 0 and 1 in them, which is
+//! undefined behaviour for `bool`. Rows that Windows writes are therefore
+//! only ever held as `MaybeUninit` and touched field by field through raw
+//! pointers, never moved or copied as values.
 
+use std::mem::MaybeUninit;
 use std::net::Ipv4Addr;
+use std::ptr::addr_of_mut;
 
-use windows::Win32::Foundation::{ERROR_NOT_FOUND, ERROR_OBJECT_ALREADY_EXISTS};
+use windows::Win32::Foundation::{ERROR_NOT_FOUND, ERROR_OBJECT_ALREADY_EXISTS, WIN32_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceLuidToGuid, CreateIpForwardEntry2, CreateUnicastIpAddressEntry,
     DNS_INTERFACE_SETTINGS, DNS_INTERFACE_SETTINGS_VERSION1, DNS_SETTING_NAMESERVER,
@@ -24,54 +32,68 @@ fn luid(value: u64) -> NET_LUID_LH {
 }
 
 fn sockaddr(ip: Ipv4Addr) -> SOCKADDR_INET {
-    SOCKADDR_INET {
-        Ipv4: SOCKADDR_IN {
-            sin_family: AF_INET,
-            sin_port: 0,
-            sin_addr: IN_ADDR {
-                S_un: IN_ADDR_0 {
-                    S_addr: u32::from_ne_bytes(ip.octets()),
-                },
+    // Start from zero so the unused IPv6 part of the union is initialised.
+    let mut addr = SOCKADDR_INET::default();
+    addr.Ipv4 = SOCKADDR_IN {
+        sin_family: AF_INET,
+        sin_port: 0,
+        sin_addr: IN_ADDR {
+            S_un: IN_ADDR_0 {
+                S_addr: u32::from_ne_bytes(ip.octets()),
             },
-            sin_zero: [0; 8],
         },
-    }
+        sin_zero: [0; 8],
+    };
+    addr
 }
 
-fn ipv4_of(addr: &SOCKADDR_INET) -> Ipv4Addr {
-    // SAFETY: only called on addresses we know are AF_INET.
-    Ipv4Addr::from(unsafe { addr.Ipv4.sin_addr.S_un.S_addr }.to_ne_bytes())
+/// # Safety
+/// `addr` must point to an initialised AF_INET `SOCKADDR_INET`.
+unsafe fn ipv4_at(addr: *const SOCKADDR_INET) -> Ipv4Addr {
+    // SAFETY: guaranteed by the caller.
+    Ipv4Addr::from(unsafe { (*addr).Ipv4.sin_addr.S_un.S_addr }.to_ne_bytes())
 }
 
-/// A route row we created, kept so it can be deleted again.
-#[derive(Clone, Copy)]
-pub struct RouteRow(MIB_IPFORWARD_ROW2);
+/// A route we created, kept so it can be deleted again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RouteRow {
+    pub if_luid: u64,
+    pub network: Ipv4Addr,
+    pub prefix_len: u8,
+    pub next_hop: Ipv4Addr,
+}
 
-impl std::fmt::Debug for RouteRow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}/{} via {} (luid {:#x})",
-            ipv4_of(&self.0.DestinationPrefix.Prefix),
-            self.0.DestinationPrefix.PrefixLength,
-            ipv4_of(&self.0.NextHop),
-            // SAFETY: Value covers the whole union.
-            unsafe { self.0.InterfaceLuid.Value }
-        )
+impl RouteRow {
+    /// Runs `f` on a Windows route row describing this route.
+    fn with_row<T>(&self, metric: u32, f: impl FnOnce(*const MIB_IPFORWARD_ROW2) -> T) -> T {
+        let mut row = MaybeUninit::<MIB_IPFORWARD_ROW2>::zeroed();
+        let p = row.as_mut_ptr();
+        // SAFETY: p points to writable memory the size of the row; fields are
+        // written through the pointer without reading the row as a value.
+        unsafe {
+            InitializeIpForwardEntry(p);
+            addr_of_mut!((*p).InterfaceLuid).write(luid(self.if_luid));
+            addr_of_mut!((*p).DestinationPrefix.Prefix).write(sockaddr(self.network));
+            addr_of_mut!((*p).DestinationPrefix.PrefixLength).write(self.prefix_len);
+            addr_of_mut!((*p).NextHop).write(sockaddr(self.next_hop));
+            addr_of_mut!((*p).Metric).write(metric);
+        }
+        f(p)
     }
 }
 
 /// The route Windows would use right now to reach `dest`: interface LUID
 /// and next hop.
 pub fn best_route(dest: Ipv4Addr) -> Result<(u64, Ipv4Addr)> {
-    let mut row = MIB_IPFORWARD_ROW2::default();
+    let mut row = MaybeUninit::<MIB_IPFORWARD_ROW2>::zeroed();
     let mut source = SOCKADDR_INET::default();
     let dest = sockaddr(dest);
+    let p = row.as_mut_ptr();
     // SAFETY: all pointers refer to live, properly sized locals.
-    let err = unsafe { GetBestRoute2(None, 0, None, &dest, 0, &mut row, &mut source) };
+    let err = unsafe { GetBestRoute2(None, 0, None, &dest, 0, p, &mut source) };
     check("GetBestRoute2", err)?;
-    // SAFETY: Value covers the whole union.
-    Ok((unsafe { row.InterfaceLuid.Value }, ipv4_of(&row.NextHop)))
+    // SAFETY: GetBestRoute2 filled the row; only plain fields are read.
+    unsafe { Ok(((*p).InterfaceLuid.Value, ipv4_at(&raw const (*p).NextHop))) }
 }
 
 /// Adds `network/prefix_len` on interface `if_luid` via `next_hop`
@@ -84,38 +106,37 @@ pub fn add_route(
     next_hop: Ipv4Addr,
     metric: u32,
 ) -> Result<Option<RouteRow>> {
-    let mut row = MIB_IPFORWARD_ROW2::default();
-    // SAFETY: row is a valid, writable MIB_IPFORWARD_ROW2.
-    unsafe { InitializeIpForwardEntry(&mut row) };
-    row.InterfaceLuid = luid(if_luid);
-    row.DestinationPrefix.Prefix = sockaddr(network);
-    row.DestinationPrefix.PrefixLength = prefix_len;
-    row.NextHop = sockaddr(next_hop);
-    row.Metric = metric;
-    // SAFETY: row was initialised above.
-    let err = unsafe { CreateIpForwardEntry2(&row) };
+    let route = RouteRow {
+        if_luid,
+        network,
+        prefix_len,
+        next_hop,
+    };
+    // SAFETY: the row pointer is valid for the duration of the call.
+    let err = route.with_row(metric, |row| unsafe { CreateIpForwardEntry2(row) });
     if err == ERROR_OBJECT_ALREADY_EXISTS {
         return Ok(None);
     }
     check("CreateIpForwardEntry2", err)?;
-    Ok(Some(RouteRow(row)))
+    Ok(Some(route))
 }
 
 pub fn delete_route(route: &RouteRow) {
-    // SAFETY: the row came from a successful CreateIpForwardEntry2.
-    let err = unsafe { DeleteIpForwardEntry2(&route.0) };
-    if err.is_err() && err != ERROR_NOT_FOUND {
-        tracing::warn!(?route, code = err.0, "could not delete route");
-    }
+    // SAFETY: the row pointer is valid for the duration of the call.
+    let err = route.with_row(0, |row| unsafe { DeleteIpForwardEntry2(row) });
+    warn_unless_ok_or_missing(err, || format!("could not delete route {route:?}"));
 }
 
 /// Assigns `ip/32` to the interface. Already present counts as success.
 pub fn add_address(if_luid: u64, ip: Ipv4Addr) -> Result<()> {
-    let mut row = address_row(if_luid, ip);
-    row.OnLinkPrefixLength = 32;
-    row.DadState = IpDadStatePreferred;
-    // SAFETY: row was initialised by address_row.
-    let err = unsafe { CreateUnicastIpAddressEntry(&row) };
+    let err = with_address_row(if_luid, ip, |p| {
+        // SAFETY: p comes from with_address_row and is valid here.
+        unsafe {
+            addr_of_mut!((*p).OnLinkPrefixLength).write(32);
+            addr_of_mut!((*p).DadState).write(IpDadStatePreferred);
+            CreateUnicastIpAddressEntry(p)
+        }
+    });
     if err == ERROR_OBJECT_ALREADY_EXISTS {
         return Ok(());
     }
@@ -123,44 +144,46 @@ pub fn add_address(if_luid: u64, ip: Ipv4Addr) -> Result<()> {
 }
 
 pub fn delete_address(if_luid: u64, ip: Ipv4Addr) {
-    let row = address_row(if_luid, ip);
-    // SAFETY: row was initialised by address_row.
-    let err = unsafe { DeleteUnicastIpAddressEntry(&row) };
-    if err.is_err() && err != ERROR_NOT_FOUND {
-        tracing::warn!(%ip, code = err.0, "could not remove tunnel address");
-    }
+    // SAFETY: p comes from with_address_row and is valid here.
+    let err = with_address_row(if_luid, ip, |p| unsafe { DeleteUnicastIpAddressEntry(p) });
+    warn_unless_ok_or_missing(err, || format!("could not remove tunnel address {ip}"));
 }
 
-fn address_row(if_luid: u64, ip: Ipv4Addr) -> MIB_UNICASTIPADDRESS_ROW {
-    let mut row = MIB_UNICASTIPADDRESS_ROW::default();
-    // SAFETY: row is a valid, writable MIB_UNICASTIPADDRESS_ROW.
-    unsafe { InitializeUnicastIpAddressEntry(&mut row) };
-    row.InterfaceLuid = luid(if_luid);
-    row.Address = sockaddr(ip);
-    row
+fn with_address_row<T>(
+    if_luid: u64,
+    ip: Ipv4Addr,
+    f: impl FnOnce(*mut MIB_UNICASTIPADDRESS_ROW) -> T,
+) -> T {
+    let mut row = MaybeUninit::<MIB_UNICASTIPADDRESS_ROW>::zeroed();
+    let p = row.as_mut_ptr();
+    // SAFETY: p points to writable memory the size of the row.
+    unsafe {
+        InitializeUnicastIpAddressEntry(p);
+        addr_of_mut!((*p).InterfaceLuid).write(luid(if_luid));
+        addr_of_mut!((*p).Address).write(sockaddr(ip));
+    }
+    f(p)
 }
 
 /// Sets the IPv4 MTU and a fixed interface metric (lower wins, also for
 /// which interface's DNS servers Windows asks first).
 pub fn set_mtu_and_metric(if_luid: u64, mtu: u32, metric: u32) -> Result<()> {
-    let mut row = MIB_IPINTERFACE_ROW::default();
-    // SAFETY: row is a valid, writable MIB_IPINTERFACE_ROW.
-    unsafe { InitializeIpInterfaceEntry(&mut row) };
-    row.Family = AF_INET;
-    row.InterfaceLuid = luid(if_luid);
-    // SAFETY: row identifies the interface by family and LUID.
-    check("GetIpInterfaceEntry", unsafe {
-        GetIpInterfaceEntry(&mut row)
-    })?;
-    row.NlMtu = mtu;
-    row.UseAutomaticMetric = false;
-    row.Metric = metric;
-    // Must be zero for IPv4 or SetIpInterfaceEntry fails.
-    row.SitePrefixLength = 0;
-    // SAFETY: row was filled by GetIpInterfaceEntry.
-    check("SetIpInterfaceEntry", unsafe {
-        SetIpInterfaceEntry(&mut row)
-    })
+    let mut row = MaybeUninit::<MIB_IPINTERFACE_ROW>::zeroed();
+    let p = row.as_mut_ptr();
+    // SAFETY: p points to writable memory the size of the row; fields are
+    // accessed through the pointer only.
+    unsafe {
+        InitializeIpInterfaceEntry(p);
+        addr_of_mut!((*p).Family).write(AF_INET);
+        addr_of_mut!((*p).InterfaceLuid).write(luid(if_luid));
+        check("GetIpInterfaceEntry", GetIpInterfaceEntry(p))?;
+        addr_of_mut!((*p).NlMtu).write(mtu);
+        addr_of_mut!((*p).UseAutomaticMetric).cast::<u8>().write(0);
+        addr_of_mut!((*p).Metric).write(metric);
+        // Must be zero for IPv4 or SetIpInterfaceEntry fails.
+        addr_of_mut!((*p).SitePrefixLength).write(0);
+        check("SetIpInterfaceEntry", SetIpInterfaceEntry(p))
+    }
 }
 
 /// Sets the interface's DNS servers and search suffixes (Windows 10 2004+).
@@ -197,6 +220,33 @@ pub fn set_dns(if_luid: u64, servers: &[Ipv4Addr], search: &[String]) -> Result<
     })
 }
 
+fn warn_unless_ok_or_missing(err: WIN32_ERROR, what: impl FnOnce() -> String) {
+    if err.is_err() && err != ERROR_NOT_FOUND {
+        tracing::warn!(code = err.0, "{}", what());
+    }
+}
+
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn best_route_to_public_address_has_an_interface() {
+        // Read-only; works without administrator rights.
+        if let Ok((luid, _)) = best_route(Ipv4Addr::new(1, 1, 1, 1)) {
+            assert_ne!(luid, 0);
+        }
+    }
+
+    #[test]
+    fn sockaddr_round_trips() {
+        let ip = Ipv4Addr::new(10, 212, 134, 200);
+        let addr = sockaddr(ip);
+        // SAFETY: built as AF_INET just above.
+        assert_eq!(unsafe { ipv4_at(&addr) }, ip);
+    }
 }

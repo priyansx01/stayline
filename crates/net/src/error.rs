@@ -19,6 +19,7 @@ pub(crate) fn check(
     call: &'static str,
     err: windows::Win32::Foundation::WIN32_ERROR,
 ) -> Result<()> {
+    tracing::debug!(call, code = err.0, "IP Helper call");
     if err.is_ok() {
         Ok(())
     } else {

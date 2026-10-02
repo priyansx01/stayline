@@ -75,13 +75,14 @@ pub enum TunnelEnd {
 /// IPv4 packets from `from_device` go to the gateway once the link is up;
 /// packets from the gateway go to `to_device` (dropped if it is full).
 /// `on_up` is called each time IPCP completes with our and the gateway's
-/// tunnel addresses. The channels are borrowed so they survive reconnects.
+/// tunnel addresses; returning `false` closes the tunnel. The channels are
+/// borrowed so they survive reconnects.
 pub async fn run<S, F>(
     stream: S,
     ppp: PppConfig,
     from_device: &mut mpsc::Receiver<Bytes>,
     to_device: &mpsc::Sender<Bytes>,
-    mut on_up: impl FnMut(Ipv4Addr, Option<Ipv4Addr>),
+    mut on_up: impl FnMut(Ipv4Addr, Option<Ipv4Addr>) -> bool,
     shutdown: F,
 ) -> TunnelEnd
 where
@@ -113,7 +114,11 @@ where
 
         while let Some(event) = session.poll_event() {
             match event {
-                PppEvent::Up { local_ip, peer_ip } => on_up(local_ip, peer_ip),
+                PppEvent::Up { local_ip, peer_ip } => {
+                    if !on_up(local_ip, peer_ip) {
+                        session.close(Instant::now());
+                    }
+                }
                 PppEvent::Ip(packet) => {
                     if to_device.try_send(packet).is_err() {
                         tracing::trace!("adapter queue full, dropping packet");
@@ -258,7 +263,7 @@ mod tests {
                 PppConfig::new(0xabcd, None),
                 &mut from_device,
                 &to_device,
-                move |local, peer| up_tx.send((local, peer)).unwrap(),
+                move |local, peer| up_tx.send((local, peer)).is_ok(),
                 async {
                     stop_rx.await.ok();
                 },
@@ -294,7 +299,7 @@ mod tests {
             PppConfig::new(1, None),
             &mut from_device,
             &to_device,
-            |_, _| {},
+            |_, _| true,
             std::future::pending(),
         )
         .await;
