@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>stayline: third-party notices</title>
+<style>
+  body { font-family: "Segoe UI", sans-serif; max-width: 900px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.6em; } h2 { font-size: 1.2em; margin-top: 2em; border-bottom: 1px solid #ccc; }
+  ul.overview li { margin: .2em 0; }
+  ul.used-by { columns: 2; font-size: .9em; }
+  pre { white-space: pre-wrap; background: #f6f6f6; padding: 1em; font-size: .85em; }
+</style>
+</head>
+<body>
+<h1>stayline: third-party notices</h1>
+<p>stayline is built on the open-source software listed below. We are grateful to its authors.
+Each component is used under the licence shown; the full licence texts follow.</p>
+<p>stayline is not affiliated with or endorsed by Fortinet, Inc. FortiGate and FortiClient are trademarks of Fortinet, Inc.
+The behaviour of the FortiGate SSL-VPN protocol was learned from the documentation and behaviour of
+<a href="https://github.com/adrienverge/openfortivpn">openfortivpn</a>; no openfortivpn code is included.</p>
+
+<h2>Components that are not Rust crates</h2>
+<ul>
+  <li><b>Wintun</b> (wintun.dll) by WireGuard LLC, <a href="https://www.wintun.net">wintun.net</a>: Prebuilt Binaries License, reproduced below.</li>
+  <li><b>Slint</b> user interface toolkit, <a href="https://slint.dev">slint.dev</a>: used under the Slint Royalty-free Desktop, Mobile, and Web Applications License 2.0, which requires the "Made with Slint" attribution shown on stayline's About page.</li>
+</ul>
+
+<h2>Licences used</h2>
+<ul class="overview">
+{{#each overview}}
+  <li><a href="#{{id}}">{{name}}</a> ({{count}} components)</li>
+{{/each}}
+</ul>
+
+{{#each licenses}}
+<h2 id="{{id}}">{{name}}</h2>
+<p>Used by:</p>
+<ul class="used-by">
+{{#each used_by}}
+  <li>{{crate.name}} {{crate.version}}</li>
+{{/each}}
+</ul>
+<pre>{{text}}</pre>
+{{/each}}
+
+<h2 id="slint">Slint Royalty-free Desktop, Mobile, and Web Applications License 2.0</h2>
+<p>Used by the Slint crates listed above as LicenseRef-Slint-Royalty-free-2.0.</p>
+<pre><!-- SLINT_LICENSE --></pre>
+
+<h2 id="wintun">Wintun Prebuilt Binaries License</h2>
+<pre><!-- WINTUN_LICENSE --></pre>
+</body>
+</html>

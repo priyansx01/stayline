@@ -1,4 +1,10 @@
-import { Button, LineEdit, CheckBox, TabWidget, GroupBox, AboutSlint, Palette, ScrollView, StandardListView, ComboBox } from "std-widgets.slint";
+import { Button, LineEdit, CheckBox, TabWidget, GroupBox, AboutSlint, Palette, ScrollView, StandardListView, ComboBox, ListView } from "std-widgets.slint";
+
+export struct Component {
+    name: string,
+    version: string,
+    license: string,
+}
 
 // 0 = off, 1 = busy, 2 = on, 3 = needs attention
 component StatusDot inherits Rectangle {
@@ -124,6 +130,7 @@ export component AppWindow inherits Window {
     in property <string> service-status;
 
     in-out property <int> current-tab;
+    in property <[Component]> components;
 
     callback connect();
     callback disconnect();
@@ -139,6 +146,7 @@ export component AppWindow inherits Window {
     callback trust-certificate();
     callback preferences-changed();
     callback open-logs();
+    callback open-notices();
 
     TabWidget {
         current-index <=> root.current-tab;
@@ -538,24 +546,79 @@ export component AppWindow inherits Window {
             VerticalLayout {
                 padding: 20px;
                 spacing: 10px;
-                alignment: start;
-                Text {
-                    text: "stayline";
-                    font-size: 22px;
-                    font-weight: 600;
+                HorizontalLayout {
+                    spacing: 16px;
+                    VerticalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Text {
+                            text: "stayline";
+                            font-size: 22px;
+                            font-weight: 600;
+                        }
+                        Text {
+                            text: "Version " + root.version;
+                        }
+                        Text {
+                            text: "Keeps your FortiGate SSL-VPN connection up and reconnects it automatically after network changes and sleep.";
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: "stayline is not affiliated with or endorsed by Fortinet, Inc. FortiGate and FortiClient are trademarks of Fortinet, Inc. Protocol behaviour was learned from the openfortivpn project; no openfortivpn code is included.";
+                            wrap: word-wrap;
+                            font-size: 11px;
+                            color: Palette.foreground.with-alpha(0.6);
+                        }
+                    }
+                    AboutSlint {
+                        width: 200px;
+                        height: 110px;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: "Open-source components (" + root.components.length + ")";
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: "Full licence texts";
+                        clicked => {
+                            root.open-notices();
+                        }
+                    }
                 }
                 Text {
-                    text: "Version " + root.version;
+                    text: "stayline is built on the open-source software below. Thank you to all of its authors.";
+                    font-size: 12px;
+                    color: Palette.foreground.with-alpha(0.7);
                 }
-                Text {
-                    text: "Keeps your FortiGate SSL-VPN connection up and reconnects it automatically after network changes and sleep.";
-                    wrap: word-wrap;
-                }
-                Rectangle {
-                    height: 12px;
-                }
-                AboutSlint {
-                    height: 150px;
+                ListView {
+                    vertical-stretch: 1;
+                    for component in root.components: HorizontalLayout {
+                        padding-top: 2px;
+                        padding-bottom: 2px;
+                        spacing: 12px;
+                        Text {
+                            text: component.name;
+                            width: 220px;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: component.version;
+                            width: 80px;
+                            color: Palette.foreground.with-alpha(0.65);
+                        }
+                        Text {
+                            text: component.license;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                            color: Palette.foreground.with-alpha(0.65);
+                        }
+                    }
                 }
             }
         }
