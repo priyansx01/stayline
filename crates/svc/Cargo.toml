@@ -1,0 +1,13 @@
+[package]
+name = "stayline-svc"
+description = "stayline Windows service: owns the tunnel, adapter, routes and DNS"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+stayline-core.workspace = true
+stayline-ipc.workspace = true
+anyhow.workspace = true

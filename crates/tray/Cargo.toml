@@ -1,0 +1,12 @@
+[package]
+name = "stayline-tray"
+description = "stayline tray app: status icon, login and settings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+stayline-ipc.workspace = true
+anyhow.workspace = true

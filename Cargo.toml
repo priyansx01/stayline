@@ -1,0 +1,65 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/core",
+    "crates/ipc",
+    "crates/svc",
+    "crates/tray",
+    "crates/probe",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/priyansx01/stayline"
+
+[workspace.dependencies]
+stayline-core = { path = "crates/core" }
+stayline-ipc = { path = "crates/ipc" }
+
+# UI (tray)
+tray-icon = "0.26.0"
+muda = "0.21.0"
+slint = "1.18.1"
+slint-build = "1.18.1"
+tauri-winrt-notification = "0.8.1"
+auto-launch = "0.6.0"
+
+# Async, TLS, HTTP
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1.0.9"
+native-tls = "0.2.18"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "cookies"] }
+quick-xml = "0.42.0"
+url = "2.5.8"
+bytes = "1.12.1"
+sha2 = "0.11.0"
+hex = "0.4.3"
+
+# Windows
+wintun = "0.5.1"
+windows-service = "0.8.1"
+windows = "0.62.2"
+
+# Common
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "1.1.6"
+directories = "6.0.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tracing-appender = "0.2.5"
+anyhow = "1.0.104"
+thiserror = "2.0.21"
+zeroize = "1.8.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+opt-level = "s"

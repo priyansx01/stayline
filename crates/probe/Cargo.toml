@@ -1,0 +1,13 @@
+[package]
+name = "stayline-probe"
+description = "Developer CLI to test login and tunnel against a FortiGate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+stayline-core.workspace = true
+anyhow.workspace = true
