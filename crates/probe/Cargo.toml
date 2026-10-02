@@ -11,7 +11,10 @@ publish = false
 [dependencies]
 stayline-core.workspace = true
 anyhow.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
 tracing-subscriber.workspace = true
 rpassword.workspace = true
 zeroize.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+stayline-net.workspace = true

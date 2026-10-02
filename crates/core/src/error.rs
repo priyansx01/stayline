@@ -39,6 +39,9 @@ pub enum Error {
     #[error("could not parse tunnel configuration: {0}")]
     ConfigParse(String),
 
+    #[error("tunnel protocol error: {0}")]
+    Protocol(String),
+
     #[error("unexpected login response (HTTP {status}): {body}")]
     UnexpectedLogin { status: u16, body: String },
 }

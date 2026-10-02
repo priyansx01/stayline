@@ -1,8 +1,9 @@
 //! Developer CLI for checking a FortiGate gateway before the service exists.
 //!
 //! ```text
-//! stayline-probe cert  <gateway>
-//! stayline-probe login <gateway> --user <name> [--realm <realm>] [--pin <sha256>] [--keep-session]
+//! stayline-probe cert   <gateway>
+//! stayline-probe login  <gateway> --user <name> [--realm <realm>] [--pin <sha256>] [--keep-session]
+//! stayline-probe tunnel <gateway> --user <name> [--realm <realm>] [--pin <sha256>]
 //! ```
 //!
 //! The password is read from `STAYLINE_PASSWORD` or prompted for without echo.
@@ -12,17 +13,23 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use stayline_core::{
-    Credentials, Error, Fingerprint, Gateway, GatewayClient, LoginOutcome, TunnelConfig,
+    Credentials, Error, Fingerprint, Gateway, GatewayClient, LoginOutcome, SessionCookie,
+    TunnelConfig,
 };
 use zeroize::Zeroizing;
 
+#[cfg(windows)]
+mod tunnel;
+
 const USAGE: &str = "\
 usage:
-  stayline-probe cert  <gateway>
-  stayline-probe login <gateway> --user <name> [--realm <realm>] [--pin <sha256>] [--keep-session]
+  stayline-probe cert   <gateway>
+  stayline-probe login  <gateway> --user <name> [--realm <realm>] [--pin <sha256>] [--keep-session]
+  stayline-probe tunnel <gateway> --user <name> [--realm <realm>] [--pin <sha256>]
 
 <gateway> is host, host:port or https://host:port.
 The password is read from STAYLINE_PASSWORD, or prompted for.
+`tunnel` needs an elevated prompt and wintun.dll next to the executable.
 Set RUST_LOG=debug for request logs.";
 
 #[tokio::main]
@@ -49,6 +56,13 @@ async fn run(args: Vec<String>) -> Result<()> {
             cert(&gateway).await
         }
         Some("login") => login(LoginArgs::parse(args)?).await,
+        #[cfg(windows)]
+        Some("tunnel") => {
+            let args = LoginArgs::parse(args)?;
+            let (gateway, pin) = (args.gateway.clone(), args.pin);
+            let (client, cookie) = authenticate(args).await?;
+            tunnel::run(&client, &gateway, pin, &cookie).await
+        }
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             Ok(())
@@ -109,6 +123,21 @@ impl LoginArgs {
 }
 
 async fn login(args: LoginArgs) -> Result<()> {
+    let keep_session = args.keep_session;
+    let (client, cookie) = authenticate(args).await?;
+
+    let result = client.tunnel_config(&cookie).await;
+    if keep_session {
+        println!("session      kept open on the gateway");
+    } else {
+        client.logout(&cookie).await;
+    }
+    print_config(&result?);
+    Ok(())
+}
+
+/// Prompts for the password (and token code if asked) and logs in.
+async fn authenticate(args: LoginArgs) -> Result<(GatewayClient, SessionCookie)> {
     let password = match std::env::var("STAYLINE_PASSWORD") {
         Ok(p) => Zeroizing::new(p),
         Err(_) => Zeroizing::new(rpassword::prompt_password(format!(
@@ -141,15 +170,7 @@ async fn login(args: LoginArgs) -> Result<()> {
         }
         Err(e) => return Err(e.into()),
     };
-
-    let result = client.tunnel_config(&cookie).await;
-    if args.keep_session {
-        println!("session      kept open on the gateway");
-    } else {
-        client.logout(&cookie).await;
-    }
-    print_config(&result?);
-    Ok(())
+    Ok((client, cookie))
 }
 
 fn print_config(cfg: &TunnelConfig) {

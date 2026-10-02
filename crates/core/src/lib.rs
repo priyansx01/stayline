@@ -8,7 +8,9 @@ pub mod client;
 pub mod config;
 pub mod error;
 pub mod gateway;
+pub mod ppp;
 pub mod tls;
+pub mod tunnel;
 
 pub use auth::{Credentials, LoginOutcome, SessionCookie, TokenChallenge};
 pub use client::GatewayClient;

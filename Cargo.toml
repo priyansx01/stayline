@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/core",
     "crates/ipc",
+    "crates/net",
     "crates/svc",
     "crates/tray",
     "crates/probe",
@@ -18,6 +19,7 @@ repository = "https://github.com/priyansx01/stayline"
 [workspace.dependencies]
 stayline-core = { path = "crates/core" }
 stayline-ipc = { path = "crates/ipc" }
+stayline-net = { path = "crates/net" }
 
 # UI (tray)
 tray-icon = "0.26.0"

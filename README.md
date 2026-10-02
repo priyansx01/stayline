@@ -19,6 +19,7 @@ Not in scope: IPsec/IKEv2, posture checks, EMS, web filtering, macOS/Linux.
 | --- | --- | --- |
 | `stayline-core` | lib | FortiGate login, XML config, tunnel, minimal PPP (LCP, IPCP, echo), reconnect state machine. No Windows code. |
 | `stayline-ipc` | lib | Messages between tray and service over a named pipe. |
+| `stayline-net` | lib | Windows only: Wintun adapter, address, MTU, routes and DNS through the IP Helper API. |
 | `stayline-svc` | bin | Windows service (LocalSystem). Owns the Wintun adapter, routes, DNS and the reconnect loop. |
 | `stayline-tray` | bin | Tray icon and menu, login/settings window, notifications, saved password. |
 | `stayline-probe` | bin | Developer CLI for testing login and the tunnel against a gateway. |
@@ -39,7 +40,11 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-`wintun.dll` (from wintun.net) must sit next to `stayline-svc.exe` / `stayline-probe.exe` at runtime.
+`wintun.dll` (from wintun.net) must sit next to `stayline-svc.exe` / `stayline-probe.exe` at runtime. This downloads it, checks its hash and copies it into `target\debug` and `target\release`:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\fetch-wintun.ps1
+```
 
 ## Checking a gateway
 
@@ -53,11 +58,21 @@ cargo run -p stayline-probe -- login vpn.example.com:10443 --user alice [--pin <
 
 The password is prompted for (or read from `STAYLINE_PASSWORD`). If the gateway asks for a token code, the probe asks for it too. The output shows whether the gateway offers PPP tunnel mode and how long a session can be reused, which decides how far silent reconnects can go.
 
+To bring the tunnel up in the foreground, from an **elevated** prompt:
+
+```
+cargo run -p stayline-probe -- tunnel vpn.example.com:10443 --user alice [--pin <sha256>]
+```
+
+This creates a `stayline` network adapter, sets its address, routes and DNS, and stays connected until Ctrl+C. Run with `RUST_LOG=stayline_core=debug` to see PPP negotiation.
+
+Known limitation: with split tunnelling, the tunnel's DNS servers get the lowest interface metric, so Windows asks them first for all names, not only the split-DNS domains.
+
 ## Status
 
 - [x] Workspace scaffold
 - [x] Login probe
-- [ ] Tunnel up
+- [x] Tunnel up (needs testing against a real gateway)
 - [ ] Reconnect engine
 - [ ] Service + tray split
 - [ ] Login and settings window
