@@ -7,7 +7,7 @@ use stayline_core::supervisor::{
 };
 use stayline_core::tunnel::TunnelStats;
 use stayline_core::{Credentials, Fingerprint, Gateway};
-use stayline_ipc::{CertificateReport, Profile, TunnelState};
+use stayline_ipc::{Attention, CertificateReport, Profile, TunnelState};
 use stayline_net::{DeviceChannels, NetworkWatcher, TunDevice, WindowsHooks};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -144,7 +144,10 @@ impl Controller {
         let forward = tokio::spawn(async move {
             while status_rx.changed().await.is_ok() {
                 let status = status_rx.borrow_and_update().clone();
-                state.send_replace(to_ipc(&status));
+                // The session reports needing the user itself, with details.
+                if !matches!(status, Status::NeedsUser { .. }) {
+                    state.send_replace(to_ipc(&status));
+                }
             }
         });
 
@@ -175,13 +178,38 @@ impl Controller {
             SupervisorEnd::Stopped => {
                 self.state.send_replace(TunnelState::Disconnected);
             }
-            SupervisorEnd::NeedsUser(e) => self.fail(e.to_string()),
+            SupervisorEnd::NeedsUser(e) => {
+                let attention = attention_for(&e, &gateway).await;
+                self.fail_with(e.to_string(), attention);
+            }
         }
     }
 
     fn fail(&self, reason: String) {
-        tracing::error!(%reason, "tunnel stopped");
-        self.state.send_replace(TunnelState::NeedsUser { reason });
+        self.fail_with(reason, Attention::Other);
+    }
+
+    fn fail_with(&self, reason: String, attention: Attention) {
+        tracing::error!(%reason, ?attention, "tunnel stopped");
+        self.state
+            .send_replace(TunnelState::NeedsUser { reason, attention });
+    }
+}
+
+/// Classifies why the session needs the user. For an untrusted certificate
+/// the fingerprint is fetched so the user can decide whether to trust it.
+async fn attention_for(error: &stayline_core::Error, gateway: &Gateway) -> Attention {
+    use stayline_core::Error;
+    match error {
+        Error::BadCredentials => Attention::Credentials,
+        Error::CertificateChanged { expected, actual } => Attention::CertificateChanged {
+            expected: expected.clone(),
+            actual: actual.clone(),
+        },
+        Error::CertificateUntrusted(_) => Attention::CertificateUntrusted {
+            fingerprint: inspect_certificate(gateway.to_string()).await.fingerprint,
+        },
+        _ => Attention::Other,
     }
 }
 
@@ -234,6 +262,7 @@ fn to_ipc(status: &Status) -> TunnelState {
         Status::WaitingForNetwork => TunnelState::WaitingForNetwork,
         Status::NeedsUser { reason } => TunnelState::NeedsUser {
             reason: reason.clone(),
+            attention: Attention::Other,
         },
         Status::Disconnected => TunnelState::Disconnected,
     }

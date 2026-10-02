@@ -84,7 +84,24 @@ pub enum TunnelState {
     /// Retrying cannot help, e.g. the password was rejected.
     NeedsUser {
         reason: String,
+        #[serde(default)]
+        attention: Attention,
     },
+}
+
+/// What the user has to deal with when the tunnel needs them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Attention {
+    #[default]
+    Other,
+    /// Username or password rejected.
+    Credentials,
+    /// The certificate is not publicly trusted and no pin is set; the
+    /// user may decide to trust it.
+    CertificateUntrusted { fingerprint: Option<String> },
+    /// The certificate differs from the pinned one: possibly intercepted.
+    CertificateChanged { expected: String, actual: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,6 +232,30 @@ mod tests {
         assert_eq!(
             json,
             r#"{"type":"status","state":"connected","local_ip":"10.0.0.5","since_unix":1790000000}"#
+        );
+    }
+
+    #[test]
+    fn needs_user_carries_attention_and_tolerates_older_services() {
+        let state = TunnelState::NeedsUser {
+            reason: "x".into(),
+            attention: Attention::CertificateUntrusted {
+                fingerprint: Some("ab".into()),
+            },
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert_eq!(
+            json,
+            r#"{"state":"needs_user","reason":"x","attention":{"kind":"certificate_untrusted","fingerprint":"ab"}}"#
+        );
+        let old: TunnelState =
+            serde_json::from_str(r#"{"state":"needs_user","reason":"x"}"#).unwrap();
+        assert_eq!(
+            old,
+            TunnelState::NeedsUser {
+                reason: "x".into(),
+                attention: Attention::Other
+            }
         );
     }
 

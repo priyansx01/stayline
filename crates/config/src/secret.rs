@@ -1,7 +1,6 @@
-//! The saved password, encrypted with Windows DPAPI for the current user.
-//!
-//! Only the same Windows account on the same machine can decrypt it. The
-//! file lives in the user's local (non-roaming) app data folder.
+//! Saved passwords, one per connection, encrypted with Windows DPAPI for
+//! the current user. Only the same Windows account on the same machine can
+//! decrypt them. Files live in the user's local (non-roaming) app data.
 
 use std::path::PathBuf;
 
@@ -12,8 +11,10 @@ use windows::Win32::Security::Cryptography::{
 use windows::core::w;
 use zeroize::Zeroizing;
 
+use crate::{project_dirs, write_atomically};
+
 /// Extra input to DPAPI so other programs using DPAPI for this user cannot
-/// decrypt the file by accident.
+/// decrypt the files by accident.
 const ENTROPY: &[u8] = b"stayline-credential-v1";
 
 #[derive(Debug, thiserror::Error)]
@@ -28,24 +29,48 @@ pub enum SecretError {
     Corrupt,
 }
 
-pub fn path() -> Result<PathBuf, SecretError> {
-    let dirs = directories::ProjectDirs::from("", "", "stayline").ok_or(SecretError::NoHome)?;
-    Ok(dirs.data_local_dir().join("credential.bin"))
+fn dir() -> Result<PathBuf, SecretError> {
+    Ok(project_dirs()
+        .map_err(|_| SecretError::NoHome)?
+        .data_local_dir()
+        .join("credentials"))
 }
 
-pub fn save(password: &str) -> Result<(), SecretError> {
-    let path = path()?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
+/// File for a connection: readable name plus a hash, so different names
+/// never share a file.
+pub fn path(connection: &str) -> Result<PathBuf, SecretError> {
+    let readable: String = connection
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .take(40)
+        .collect();
+    Ok(dir()?.join(format!(
+        "{readable}-{:016x}.bin",
+        fnv1a(connection.as_bytes())
+    )))
+}
+
+fn fnv1a(data: &[u8]) -> u64 {
+    data.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+pub fn save(connection: &str, password: &str) -> Result<(), SecretError> {
     let sealed = protect(password.as_bytes())?;
-    crate::settings::write_atomically(&path, &sealed)?;
+    write_atomically(&path(connection)?, &sealed)?;
     Ok(())
 }
 
 /// The saved password, or `None` if none is saved.
-pub fn load() -> Result<Option<Zeroizing<String>>, SecretError> {
-    let sealed = match std::fs::read(path()?) {
+pub fn load(connection: &str) -> Result<Option<Zeroizing<String>>, SecretError> {
+    let sealed = match std::fs::read(path(connection)?) {
         Ok(data) => data,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
@@ -55,15 +80,41 @@ pub fn load() -> Result<Option<Zeroizing<String>>, SecretError> {
     Ok(Some(Zeroizing::new(text.to_owned())))
 }
 
-pub fn forget() -> Result<(), SecretError> {
-    match std::fs::remove_file(path()?) {
+pub fn forget(connection: &str) -> Result<(), SecretError> {
+    match std::fs::remove_file(path(connection)?) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
         _ => Ok(()),
     }
 }
 
-pub fn is_saved() -> bool {
-    path().is_ok_and(|p| p.exists())
+pub fn is_saved(connection: &str) -> bool {
+    path(connection).is_ok_and(|p| p.exists())
+}
+
+/// Keeps a saved password when a connection is renamed.
+pub fn rename(old: &str, new: &str) -> Result<(), SecretError> {
+    let (from, to) = (path(old)?, path(new)?);
+    if from.exists() && from != to {
+        std::fs::rename(from, to)?;
+    }
+    Ok(())
+}
+
+/// Moves the password saved before multiple connections existed to the
+/// connection it was converted into.
+pub(crate) fn adopt_legacy(connection: &str) {
+    let Ok(dirs) = project_dirs() else { return };
+    let legacy = dirs.data_local_dir().join("credential.bin");
+    let Ok(target) = path(connection) else { return };
+    if legacy.exists() && !target.exists() {
+        let moved = target
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::rename(&legacy, &target));
+        if let Err(e) = moved {
+            tracing::warn!(error = %e, "could not move the saved password");
+        }
+    }
 }
 
 fn blob(data: &[u8]) -> CRYPT_INTEGER_BLOB {
@@ -73,7 +124,7 @@ fn blob(data: &[u8]) -> CRYPT_INTEGER_BLOB {
     }
 }
 
-/// Copies a DPAPI output blob and frees it.
+/// Copies a DPAPI output blob, wipes and frees it.
 ///
 /// # Safety
 /// `out` must have been filled by a successful DPAPI call.
@@ -88,12 +139,11 @@ unsafe fn take(out: CRYPT_INTEGER_BLOB) -> Zeroizing<Vec<u8>> {
     }
 }
 
-pub(crate) fn protect(plain: &[u8]) -> Result<Vec<u8>, SecretError> {
+fn protect(plain: &[u8]) -> Result<Vec<u8>, SecretError> {
     let input = blob(plain);
     let entropy = blob(ENTROPY);
     let mut out = CRYPT_INTEGER_BLOB::default();
-    // SAFETY: input and entropy point to live buffers; out receives a
-    // LocalAlloc'd buffer that take() frees.
+    // SAFETY: input and entropy point to live buffers; take() frees out.
     unsafe {
         CryptProtectData(
             &input,
@@ -109,7 +159,7 @@ pub(crate) fn protect(plain: &[u8]) -> Result<Vec<u8>, SecretError> {
     }
 }
 
-pub(crate) fn unprotect(sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, SecretError> {
+fn unprotect(sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, SecretError> {
     let input = blob(sealed);
     let entropy = blob(ENTROPY);
     let mut out = CRYPT_INTEGER_BLOB::default();
@@ -149,10 +199,20 @@ mod tests {
         let mid = sealed.len() / 2;
         sealed[mid] ^= 0xff;
         assert!(matches!(unprotect(&sealed), Err(SecretError::Crypto(_))));
+        assert!(unprotect(b"not a dpapi blob").is_err());
     }
 
     #[test]
-    fn garbage_fails_cleanly() {
-        assert!(unprotect(b"not a dpapi blob").is_err());
+    fn file_names_are_distinct_and_safe() {
+        let a = path("Company VPN").unwrap();
+        let b = path("company-vpn").unwrap();
+        assert_ne!(a, b);
+        let name = a.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with("company-vpn-") && name.ends_with(".bin"),
+            "{name}"
+        );
+        let odd = path("../..\\x:y").unwrap();
+        assert_eq!(odd.parent(), a.parent());
     }
 }

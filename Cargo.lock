@@ -5154,6 +5154,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "stayline-config"
+version = "0.1.0"
+dependencies = [
+ "directories",
+ "serde",
+ "stayline-ipc",
+ "thiserror 2.0.21",
+ "toml 1.1.6+spec-1.1.0",
+ "tracing",
+ "windows",
+ "zeroize",
+]
+
+[[package]]
 name = "stayline-core"
 version = "0.1.0"
 dependencies = [
@@ -5202,9 +5216,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "rpassword",
+ "stayline-config",
  "stayline-core",
  "stayline-net",
- "stayline-tray",
  "tokio",
  "tracing-subscriber",
  "zeroize",
@@ -5215,6 +5229,7 @@ name = "stayline-svc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "stayline-config",
  "stayline-core",
  "stayline-ipc",
  "stayline-net",
@@ -5233,14 +5248,12 @@ dependencies = [
  "anyhow",
  "auto-launch",
  "directories",
- "serde",
  "slint",
  "slint-build",
+ "stayline-config",
  "stayline-ipc",
  "tauri-winrt-notification",
- "thiserror 2.0.21",
  "tokio",
- "toml 1.1.6+spec-1.1.0",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

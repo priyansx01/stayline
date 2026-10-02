@@ -5,12 +5,16 @@
 //! stayline-svc run        run in the console for debugging (Ctrl+C stops)
 //! stayline-svc install    register and start the service (administrator)
 //! stayline-svc uninstall  stop and remove the service (administrator)
+//! stayline-svc provision --name <n> --gateway <g> [--pin <sha256>] ...
+//!                         set up a company connection (administrator)
 //! ```
 
 #[cfg(windows)]
 mod controller;
 #[cfg(windows)]
 mod pipe;
+#[cfg(windows)]
+mod provision;
 #[cfg(windows)]
 mod service;
 
@@ -39,7 +43,11 @@ fn main() -> anyhow::Result<()> {
         }
         Some("install") => service::install(),
         Some("uninstall") => service::uninstall(),
-        Some(other) => anyhow::bail!("unknown command '{other}'; use run, install or uninstall"),
+        Some("provision") => provision::provision(std::env::args().skip(2)),
+        Some("unprovision") => provision::unprovision(std::env::args().skip(2)),
+        Some(other) => anyhow::bail!(
+            "unknown command '{other}'; use run, install, uninstall, provision or unprovision"
+        ),
     }
 }
 

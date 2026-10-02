@@ -18,4 +18,4 @@ zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 stayline-net.workspace = true
-stayline-tray = { path = "../tray" }
+stayline-config.workspace = true

@@ -1,4 +1,4 @@
-import { Button, LineEdit, CheckBox, TabWidget, GroupBox, AboutSlint, Palette, ScrollView } from "std-widgets.slint";
+import { Button, LineEdit, CheckBox, TabWidget, GroupBox, AboutSlint, Palette, ScrollView, StandardListView, ComboBox } from "std-widgets.slint";
 
 // 0 = off, 1 = busy, 2 = on, 3 = needs attention
 component StatusDot inherits Rectangle {
@@ -64,13 +64,19 @@ export component AppWindow inherits Window {
     // Paint the whole window; areas without widgets would otherwise show
     // whatever is behind it.
     background: Palette.background;
-    min-width: 560px;
-    min-height: 600px;
-    preferred-width: 600px;
-    preferred-height: 660px;
+    min-width: 680px;
+    min-height: 620px;
+    preferred-width: 760px;
+    preferred-height: 740px;
 
     in property <image> app-icon;
     in property <string> version;
+
+    // Connections
+    in property <[string]> connection-names;
+    in property <[StandardListViewItem]> connection-items;
+    in-out property <int> active-index;
+    in-out property <int> selected-index;
 
     // Status
     in property <int> state-kind;
@@ -85,7 +91,13 @@ export component AppWindow inherits Window {
     in property <bool> can-disconnect;
     in property <bool> needs-attention;
 
+    // 0 = none, 1 = first connection (may trust), 2 = certificate changed
+    in property <int> trust-mode;
+    in property <string> trust-gateway;
+    in property <string> trust-fingerprint;
+
     // Connection form
+    in-out property <string> conn-name;
     in-out property <string> gateway;
     in-out property <string> username;
     in-out property <string> password;
@@ -93,6 +105,10 @@ export component AppWindow inherits Window {
     in-out property <string> pin;
     in-out property <bool> save-password: true;
     in property <bool> password-saved;
+    in property <bool> conn-managed;
+    in property <bool> realm-locked;
+    in property <bool> can-add: true;
+    in property <bool> can-remove;
     in property <string> form-error;
     in property <string> form-info;
 
@@ -111,6 +127,12 @@ export component AppWindow inherits Window {
 
     callback connect();
     callback disconnect();
+    callback choose-active(int);
+    callback trust-and-connect();
+    callback dismiss-trust();
+    callback select-connection(int);
+    callback add-connection();
+    callback remove-connection();
     callback save-settings();
     callback save-and-connect();
     callback check-certificate();
@@ -150,14 +172,98 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if root.needs-attention: Banner {
-                    text: "stayline stopped retrying because something needs your attention. Check the Connection tab, then connect again.";
+                if root.trust-mode == 1: Rectangle {
+                    background: #eba51422;
+                    border-color: #eba514;
+                    border-width: 1px;
+                    border-radius: 6px;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 10px;
+                        Text {
+                            text: "First connection to " + root.trust-gateway;
+                            font-weight: 600;
+                        }
+                        Text {
+                            text: "This gateway's certificate is not issued by a public authority, which is normal for many company VPNs. Check that the fingerprint below matches the one your IT department gave you. stayline will remember it and warn you if it ever changes.";
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.trust-fingerprint;
+                            font-family: "Consolas";
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: end;
+                            Button {
+                                text: "Cancel";
+                                clicked => {
+                                    root.dismiss-trust();
+                                }
+                            }
+                            Button {
+                                text: "Trust and connect";
+                                primary: true;
+                                clicked => {
+                                    root.trust-and-connect();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.trust-mode == 2: Rectangle {
+                    background: #d7373722;
+                    border-color: #d73737;
+                    border-width: 1px;
+                    border-radius: 6px;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 10px;
+                        Text {
+                            text: "The gateway's certificate has changed";
+                            font-weight: 600;
+                        }
+                        Text {
+                            text: "This can mean someone is intercepting your connection. stayline will not connect. Contact your IT department before doing anything else.";
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.trust-fingerprint;
+                            font-family: "Consolas";
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                if root.needs-attention && root.trust-mode == 0: Banner {
+                    text: "stayline stopped retrying because something needs your attention. Check the Connections tab, then connect again.";
                 }
 
                 GroupBox {
                     title: "Connection";
                     VerticalLayout {
                         spacing: 8px;
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Text {
+                                text: "Profile";
+                                width: 130px;
+                                vertical-alignment: center;
+                                color: Palette.foreground.with-alpha(0.65);
+                            }
+                            ComboBox {
+                                model: root.connection-names;
+                                current-index <=> root.active-index;
+                                enabled: root.can-connect;
+                                selected => {
+                                    root.choose-active(self.current-index);
+                                }
+                            }
+                        }
                         Field {
                             label: "Gateway";
                             value: root.gateway-display;
@@ -204,113 +310,178 @@ export component AppWindow inherits Window {
         }
 
         Tab {
-            title: "Connection";
-            ScrollView {
+            title: "Connections";
+            HorizontalLayout {
+                padding: 16px;
+                spacing: 16px;
+
                 VerticalLayout {
-                    padding: 20px;
-                    spacing: 14px;
-
-                    if root.form-error != "": Banner {
-                        text: root.form-error;
-                    }
-                    if root.form-info != "": Banner {
-                        text: root.form-info;
-                        error: false;
-                    }
-
-                    Labeled {
-                        label: "Gateway";
-                        hint: "Address of the FortiGate SSL-VPN, for example vpn.example.com or 203.0.113.10:10443.";
-                        LineEdit {
-                            text <=> root.gateway;
-                            placeholder-text: "vpn.example.com:10443";
+                    width: 190px;
+                    spacing: 8px;
+                    StandardListView {
+                        model: root.connection-items;
+                        current-item <=> root.selected-index;
+                        current-item-changed(index) => {
+                            root.select-connection(index);
                         }
                     }
-
-                    Labeled {
-                        label: "Username";
-                        LineEdit {
-                            text <=> root.username;
-                        }
-                    }
-
-                    Labeled {
-                        label: "Password";
-                        hint: root.password-saved ? "A password is saved. Leave this empty to keep it." : "";
-                        LineEdit {
-                            text <=> root.password;
-                            input-type: InputType.password;
-                            placeholder-text: root.password-saved ? "••••••••  (saved)" : "";
-                        }
-                    }
-
-                    CheckBox {
-                        text: "Save password (encrypted for your Windows account)";
-                        checked <=> root.save-password;
-                    }
-
-                    Labeled {
-                        label: "Realm (optional)";
-                        hint: "Only needed if your IT department gave you one.";
-                        LineEdit {
-                            text <=> root.realm;
-                        }
-                    }
-
-                    GroupBox {
-                        title: "Gateway certificate";
-                        VerticalLayout {
-                            spacing: 8px;
-                            Text {
-                                text: "If the gateway uses its own (self-signed) certificate, pin its SHA-256 fingerprint. Confirm the fingerprint with IT before trusting it.";
-                                wrap: word-wrap;
-                                font-size: 12px;
-                                color: Palette.foreground.with-alpha(0.7);
-                            }
-                            LineEdit {
-                                text <=> root.pin;
-                                placeholder-text: "SHA-256 fingerprint (leave empty for a publicly trusted certificate)";
-                                font-size: 11px;
-                            }
-                            HorizontalLayout {
-                                spacing: 10px;
-                                alignment: start;
-                                Button {
-                                    text: root.cert-checking ? "Checking…" : "Check certificate";
-                                    enabled: !root.cert-checking && root.gateway != "";
-                                    clicked => {
-                                        root.check-certificate();
-                                    }
-                                }
-                                if root.cert-fingerprint != "" && !root.cert-public && root.cert-fingerprint != root.pin: Button {
-                                    text: "Trust this certificate";
-                                    clicked => {
-                                        root.trust-certificate();
-                                    }
-                                }
-                            }
-                            if root.cert-result != "": Text {
-                                text: root.cert-result;
-                                wrap: word-wrap;
-                                font-size: 12px;
-                            }
-                        }
-                    }
-
                     HorizontalLayout {
-                        spacing: 10px;
-                        alignment: end;
+                        spacing: 8px;
                         Button {
-                            text: "Save";
+                            text: "Add";
+                            enabled: root.can-add;
                             clicked => {
-                                root.save-settings();
+                                root.add-connection();
                             }
                         }
                         Button {
-                            text: "Save and connect";
-                            primary: true;
+                            text: "Remove";
+                            enabled: root.can-remove;
                             clicked => {
-                                root.save-and-connect();
+                                root.remove-connection();
+                            }
+                        }
+                    }
+                }
+
+                ScrollView {
+                    VerticalLayout {
+                        padding-right: 8px;
+                        spacing: 14px;
+                        alignment: start;
+
+                        if root.form-error != "": Banner {
+                            text: root.form-error;
+                        }
+                        if root.form-info != "": Banner {
+                            text: root.form-info;
+                            error: false;
+                        }
+                        if root.conn-managed: Text {
+                            text: "Set up by your organisation. Only your username and password can be changed here.";
+                            wrap: word-wrap;
+                            font-size: 12px;
+                            color: Palette.foreground.with-alpha(0.7);
+                        }
+
+                        if root.conn-managed: GroupBox {
+                            title: root.conn-name;
+                            VerticalLayout {
+                                spacing: 6px;
+                                Field {
+                                    label: "Gateway";
+                                    value: root.gateway;
+                                }
+                                Field {
+                                    label: "Certificate";
+                                    value: root.pin != "" ? "Pinned by your organisation" : "Publicly trusted, or confirmed on first connect";
+                                }
+                            }
+                        }
+
+                        if !root.conn-managed: Labeled {
+                            label: "Name";
+                            LineEdit {
+                                text <=> root.conn-name;
+                                placeholder-text: "Office VPN";
+                            }
+                        }
+
+                        if !root.conn-managed: Labeled {
+                            label: "Gateway";
+                            hint: "Address of the FortiGate SSL-VPN, for example vpn.example.com or 203.0.113.10:10443.";
+                            LineEdit {
+                                text <=> root.gateway;
+                                placeholder-text: "vpn.example.com:10443";
+                            }
+                        }
+
+                        Labeled {
+                            label: "Username";
+                            LineEdit {
+                                text <=> root.username;
+                            }
+                        }
+
+                        Labeled {
+                            label: "Password";
+                            hint: root.password-saved ? "A password is saved. Leave this empty to keep it." : "";
+                            LineEdit {
+                                text <=> root.password;
+                                input-type: InputType.password;
+                                placeholder-text: root.password-saved ? "••••••••  (saved)" : "";
+                            }
+                        }
+
+                        CheckBox {
+                            text: "Save password (encrypted for your Windows account)";
+                            checked <=> root.save-password;
+                        }
+
+                        Labeled {
+                            label: "Realm (optional)";
+                            hint: "Only needed if your IT department gave you one.";
+                            LineEdit {
+                                text <=> root.realm;
+                                read-only: root.realm-locked;
+                            }
+                        }
+
+                        if !root.conn-managed: GroupBox {
+                            title: "Gateway certificate";
+                            VerticalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: "If the gateway uses its own (self-signed) certificate, pin its SHA-256 fingerprint. Confirm it with IT before trusting it. Leave empty to be asked on first connect.";
+                                    wrap: word-wrap;
+                                    font-size: 12px;
+                                    color: Palette.foreground.with-alpha(0.7);
+                                }
+                                LineEdit {
+                                    text <=> root.pin;
+                                    placeholder-text: "SHA-256 fingerprint";
+                                    font-size: 11px;
+                                }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    alignment: start;
+                                    Button {
+                                        text: root.cert-checking ? "Checking…" : "Check certificate";
+                                        enabled: !root.cert-checking && root.gateway != "";
+                                        clicked => {
+                                            root.check-certificate();
+                                        }
+                                    }
+                                    if root.cert-fingerprint != "" && !root.cert-public && root.cert-fingerprint != root.pin: Button {
+                                        text: "Trust this certificate";
+                                        clicked => {
+                                            root.trust-certificate();
+                                        }
+                                    }
+                                }
+                                if root.cert-result != "": Text {
+                                    text: root.cert-result;
+                                    wrap: word-wrap;
+                                    font-size: 12px;
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: end;
+                            Button {
+                                text: "Save";
+                                clicked => {
+                                    root.save-settings();
+                                }
+                            }
+                            Button {
+                                text: "Save and connect";
+                                primary: true;
+                                clicked => {
+                                    root.save-and-connect();
+                                }
                             }
                         }
                     }

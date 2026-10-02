@@ -1,0 +1,25 @@
+[package]
+name = "stayline-config"
+description = "stayline connection settings: company-managed connections, user settings and saved passwords"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+stayline-ipc.workspace = true
+serde.workspace = true
+toml.workspace = true
+directories.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+] }

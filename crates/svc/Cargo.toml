@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 stayline-core.workspace = true
 stayline-ipc.workspace = true
+stayline-config.workspace = true
 anyhow.workspace = true
 tokio = { workspace = true, features = ["rt", "signal"] }
 tracing.workspace = true

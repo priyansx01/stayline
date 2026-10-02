@@ -140,28 +140,34 @@ async fn login(args: LoginArgs) -> Result<()> {
     Ok(())
 }
 
-/// Prompts for the password (and token code if asked) and logs in.
-/// Saves the tray app's settings and the password (DPAPI-encrypted) for
-/// the current Windows user.
+/// Saves a connection called "VPN" for the app, with the password
+/// (DPAPI-encrypted for the current Windows user), and makes it active.
 #[cfg(windows)]
 fn save_login(args: LoginArgs) -> Result<()> {
-    use stayline_tray::{secret, settings::Settings};
+    use stayline_config::{Config, ConnectionEdit, secret, user::LEGACY_NAME};
 
-    let mut settings = Settings::load()?;
-    settings.gateway = args.gateway.to_string();
-    settings.username = args.user.clone();
-    settings.realm = args.realm.clone();
-    settings.pin = args.pin.map(|p| p.to_string());
-    settings.save()?;
+    let mut config = Config::load()?;
+    let exists = config.connection(LEGACY_NAME).is_some();
+    config
+        .save_connection(
+            exists.then_some(LEGACY_NAME),
+            ConnectionEdit {
+                name: LEGACY_NAME.into(),
+                gateway: args.gateway.to_string(),
+                username: args.user.clone(),
+                realm: args.realm.clone(),
+                pin: args.pin.map(|p| p.to_string()),
+            },
+        )
+        .map_err(anyhow::Error::msg)?;
+    config.set_active(LEGACY_NAME);
+    config.user.save()?;
     let creds = read_credentials(args.user, args.realm)?;
-    secret::save(&creds.password)?;
-    println!(
-        "settings     {}",
-        stayline_tray::settings::path()?.display()
-    );
+    secret::save(LEGACY_NAME, &creds.password)?;
+    println!("settings     {}", stayline_config::user::path()?.display());
     println!(
         "password     {} (encrypted for this Windows user)",
-        secret::path()?.display()
+        secret::path(LEGACY_NAME)?.display()
     );
     Ok(())
 }
@@ -181,6 +187,7 @@ fn read_credentials(user: String, realm: Option<String>) -> Result<Credentials> 
     })
 }
 
+/// Prompts for the password (and token code if asked) and logs in.
 async fn authenticate(args: LoginArgs) -> Result<(GatewayClient, SessionCookie)> {
     let creds = read_credentials(args.user, args.realm)?;
     let client = GatewayClient::new(args.gateway, args.pin)?;

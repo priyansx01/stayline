@@ -7,6 +7,8 @@ mod autostart;
 #[cfg(windows)]
 mod client;
 #[cfg(windows)]
+mod format;
+#[cfg(windows)]
 mod icons;
 #[cfg(windows)]
 mod instance;

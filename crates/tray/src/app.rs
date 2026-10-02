@@ -6,12 +6,15 @@
 //! and dropped when closed, so an idle tray uses little memory.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use slint::{ComponentHandle, Timer, TimerMode};
-use stayline_ipc::{CertificateReport, Event, Request, TunnelState};
-use stayline_tray::settings::{self, Settings};
-use stayline_tray::{format, secret};
+use slint::{
+    ComponentHandle, ModelRc, SharedString, StandardListViewItem, Timer, TimerMode, VecModel,
+};
+use stayline_config::{Config, Connection, ConnectionEdit, secret};
+use stayline_ipc::{Attention, CertificateReport, Event, Request, TunnelState};
 use tauri_winrt_notification::Toast;
 use tokio::sync::mpsc;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -20,13 +23,14 @@ use zeroize::Zeroizing;
 
 use crate::client::{self, FromService};
 use crate::icons::{self, Light};
-use crate::{autostart, instance};
+use crate::{autostart, format, instance};
 
 slint::include_modules!();
 
 const TAB_STATUS: i32 = 0;
-const TAB_CONNECTION: i32 = 1;
+const TAB_CONNECTIONS: i32 = 1;
 const SERVICE_WARNING_DELAY: Duration = Duration::from_secs(5);
+const NEW_CONNECTION_NAME: &str = "New connection";
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -99,9 +103,8 @@ pub fn main() {
     with_app(move |app| {
         app.requests = Some(requests);
         if !background {
-            let tab =
-                (!Settings::load().unwrap_or_default().is_complete()).then_some(TAB_CONNECTION);
-            app.show_window(tab);
+            let ready = load_config().active().is_some_and(|c| c.is_complete());
+            app.show_window((!ready).then_some(TAB_CONNECTIONS));
         }
     });
 
@@ -109,6 +112,23 @@ pub fn main() {
         tracing::error!(error = %e, "event loop failed");
     }
     APP.with(|cell| cell.borrow_mut().take());
+}
+
+fn load_config() -> Config {
+    Config::load().unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "could not load settings");
+        Config::default()
+    })
+}
+
+/// A certificate decision shown on the Status page.
+#[derive(Debug, Clone)]
+struct TrustPrompt {
+    connection: String,
+    gateway: String,
+    fingerprint: String,
+    /// The certificate changed from a pinned one: no way to continue.
+    changed: bool,
 }
 
 /// Menu items whose text or enabled state changes.
@@ -134,9 +154,14 @@ struct App {
     resync_on_status: bool,
     service_warned: bool,
     last_alert: Option<String>,
-    /// Password typed with "Save password" off; kept for this session only.
-    session_password: Option<Zeroizing<String>>,
+    /// Connection of the last connect request.
+    connecting: Option<String>,
+    /// Passwords typed with "Save password" off; kept for this session.
+    session_passwords: HashMap<String, Zeroizing<String>>,
+    trust: Option<TrustPrompt>,
     window: Option<AppWindow>,
+    /// Connection shown in the form: `Some(name)`, or `None` for a new one.
+    editing: Option<String>,
     clock: Timer,
     cert_checking: bool,
     cert: Option<CertificateReport>,
@@ -177,8 +202,11 @@ impl App {
             resync_on_status: false,
             service_warned: false,
             last_alert: None,
-            session_password: None,
+            connecting: None,
+            session_passwords: HashMap::new(),
+            trust: None,
             window: None,
+            editing: None,
             clock: Timer::default(),
             cert_checking: false,
             cert: None,
@@ -230,7 +258,7 @@ impl App {
             }
             FromService::Event(Event::Stats { sent, received }) => self.stats = (sent, received),
             FromService::Event(Event::Rejected { reason }) => {
-                self.show_window(Some(TAB_CONNECTION));
+                self.show_window(Some(TAB_CONNECTIONS));
                 self.set_form_message(&reason, true);
             }
             FromService::Event(Event::Certificate(report)) => self.on_certificate(report),
@@ -239,23 +267,19 @@ impl App {
     }
 
     fn on_state(&mut self, state: TunnelState) {
-        if let TunnelState::NeedsUser { reason } = &state
-            && self.last_alert.as_ref() != Some(reason)
-        {
-            self.last_alert = Some(reason.clone());
-            toast(&format!("VPN needs your attention: {reason}"));
-            self.show_window(Some(TAB_CONNECTION));
-            self.set_form_message(reason, true);
+        if let TunnelState::NeedsUser { reason, attention } = &state {
+            self.wants_connected = false;
+            if self.last_alert.as_ref() != Some(reason) {
+                self.last_alert = Some(reason.clone());
+                self.on_needs_user(reason, attention);
+            }
         }
         if matches!(state, TunnelState::Connected { .. }) {
             self.last_alert = None;
+            self.trust = None;
         }
         if !matches!(state, TunnelState::Connected { .. }) {
             self.stats = (0, 0);
-        }
-
-        if matches!(state, TunnelState::NeedsUser { .. }) {
-            self.wants_connected = false;
         }
 
         let first = !self.auto_connect_checked;
@@ -266,8 +290,11 @@ impl App {
             return;
         }
         if first {
-            let settings = Settings::load().unwrap_or_default();
-            if settings.auto_connect && settings.is_complete() && secret::is_saved() {
+            let config = load_config();
+            let ready = config
+                .active()
+                .is_some_and(|c| c.is_complete() && secret::is_saved(&c.name));
+            if config.user.auto_connect && ready {
                 tracing::info!("auto-connecting");
                 self.connect();
             }
@@ -279,9 +306,55 @@ impl App {
         }
     }
 
-    fn disconnect(&mut self) {
-        self.wants_connected = false;
-        self.send(Request::Disconnect);
+    fn on_needs_user(&mut self, reason: &str, attention: &Attention) {
+        let config = load_config();
+        let name = self
+            .connecting
+            .clone()
+            .or_else(|| config.active().map(|c| c.name));
+        let connection = name.as_deref().and_then(|n| config.connection(n));
+
+        match attention {
+            Attention::CertificateUntrusted {
+                fingerprint: Some(fingerprint),
+            } if connection
+                .as_ref()
+                .is_some_and(|c| c.may_trust_on_first_use) =>
+            {
+                let connection = connection.expect("checked above");
+                toast(&format!(
+                    "Confirm the certificate of {} to connect.",
+                    connection.gateway
+                ));
+                self.trust = Some(TrustPrompt {
+                    connection: connection.name,
+                    gateway: connection.gateway,
+                    fingerprint: fingerprint.clone(),
+                    changed: false,
+                });
+                self.show_window(Some(TAB_STATUS));
+            }
+            Attention::CertificateChanged { expected, actual } => {
+                toast(
+                    "The VPN gateway's certificate has changed. stayline will not connect; contact IT.",
+                );
+                self.trust = Some(TrustPrompt {
+                    connection: name.unwrap_or_default(),
+                    gateway: connection.map(|c| c.gateway).unwrap_or_default(),
+                    fingerprint: format!("Expected: {expected}\nReceived: {actual}"),
+                    changed: true,
+                });
+                self.show_window(Some(TAB_STATUS));
+            }
+            _ => {
+                toast(&format!("VPN needs your attention: {reason}"));
+                self.show_window(Some(TAB_CONNECTIONS));
+                if let Some(name) = name {
+                    self.edit_connection(Some(&name));
+                }
+                self.set_form_message(&capitalise(reason), true);
+            }
+        }
     }
 
     fn on_certificate(&mut self, report: CertificateReport) {
@@ -292,8 +365,7 @@ impl App {
                 let pinned = self
                     .window
                     .as_ref()
-                    .and_then(|w| settings::validate("x", "x", &w.get_pin()).ok())
-                    .and_then(|(_, pin)| pin);
+                    .and_then(|w| stayline_config::normalize_pin(&w.get_pin()).ok().flatten());
                 let reason = plain_certificate_problem(report.problem.as_deref().unwrap_or(""));
                 if pinned.as_deref() == Some(fp.as_str()) {
                     format!(
@@ -321,80 +393,228 @@ impl App {
     // ---- actions ------------------------------------------------------
 
     fn connect(&mut self) {
-        let settings = Settings::load().unwrap_or_default();
-        if !settings.is_complete() {
-            self.show_window(Some(TAB_CONNECTION));
-            self.set_form_message("Enter the gateway and your username first.", true);
+        let config = load_config();
+        let Some(connection) = config.active() else {
+            self.show_window(Some(TAB_CONNECTIONS));
+            self.edit_connection(None);
+            self.set_form_message("Add a connection to get started.", true);
+            return;
+        };
+        if !connection.is_complete() {
+            self.show_window(Some(TAB_CONNECTIONS));
+            self.edit_connection(Some(&connection.name));
+            self.set_form_message("Enter your username first.", true);
             return;
         }
-        let password = match secret::load() {
+        let password = match secret::load(&connection.name) {
             Ok(Some(saved)) => Some(saved),
-            Ok(None) => self.session_password.clone(),
+            Ok(None) => self.session_passwords.get(&connection.name).cloned(),
             Err(e) => {
                 tracing::warn!(error = %e, "saved password unreadable");
-                self.session_password.clone()
+                self.session_passwords.get(&connection.name).cloned()
             }
         };
         let Some(password) = password else {
-            self.show_window(Some(TAB_CONNECTION));
+            self.show_window(Some(TAB_CONNECTIONS));
+            self.edit_connection(Some(&connection.name));
             self.set_form_message("Enter your password, then choose Save and connect.", true);
             return;
         };
         self.last_alert = None;
+        self.trust = None;
         self.wants_connected = true;
+        self.connecting = Some(connection.name.clone());
         self.send(Request::Connect {
-            profile: settings.profile(),
+            profile: connection.profile(),
             password,
         });
     }
 
-    /// Saves the connection form. Returns `false` if it is invalid.
-    fn save_form(&mut self) -> bool {
-        let Some(w) = &self.window else { return false };
-        let (gateway, pin) =
-            match settings::validate(&w.get_gateway(), &w.get_username(), &w.get_pin()) {
+    fn disconnect(&mut self) {
+        self.wants_connected = false;
+        self.send(Request::Disconnect);
+    }
+
+    fn choose_active(&mut self, index: i32) {
+        let mut config = load_config();
+        let Some(connection) = config.connections().into_iter().nth(index as usize) else {
+            return;
+        };
+        config.set_active(&connection.name);
+        if let Err(e) = config.user.save() {
+            toast(&e.to_string());
+        }
+        self.refresh();
+    }
+
+    fn trust_and_connect(&mut self) {
+        let Some(prompt) = self.trust.take().filter(|p| !p.changed) else {
+            return;
+        };
+        let mut config = load_config();
+        let saved = config
+            .trust(&prompt.connection, &prompt.fingerprint)
+            .and_then(|()| config.user.save().map_err(|e| e.to_string()));
+        match saved {
+            Ok(()) => {
+                tracing::info!(
+                    connection = prompt.connection,
+                    "certificate trusted on first use"
+                );
+                self.connect();
+            }
+            Err(e) => toast(&e),
+        }
+        self.refresh();
+    }
+
+    /// Loads a connection into the form (`None` starts a new one).
+    fn edit_connection(&mut self, name: Option<&str>) {
+        let config = load_config();
+        let connection = name.and_then(|n| config.connection(n));
+        self.editing = connection.as_ref().map(|c| c.name.clone());
+        self.cert = None;
+        self.cert_checking = false;
+        let Some(w) = &self.window else { return };
+
+        let c = connection.unwrap_or(Connection {
+            name: NEW_CONNECTION_NAME.into(),
+            gateway: String::new(),
+            username: String::new(),
+            realm: None,
+            pin: None,
+            managed: false,
+            may_trust_on_first_use: true,
+        });
+        let realm_locked = c.managed
+            && config
+                .managed
+                .connections
+                .iter()
+                .any(|m| m.name == c.name && m.realm.is_some());
+        w.set_conn_name(c.name.clone().into());
+        w.set_gateway(c.gateway.clone().into());
+        w.set_username(c.username.clone().into());
+        w.set_realm(c.realm.clone().unwrap_or_default().into());
+        w.set_pin(c.pin.clone().unwrap_or_default().into());
+        w.set_password("".into());
+        let saved = self.editing.as_deref().is_some_and(secret::is_saved);
+        w.set_password_saved(saved);
+        w.set_save_password(saved || !self.session_passwords.contains_key(&c.name));
+        w.set_conn_managed(c.managed);
+        w.set_realm_locked(realm_locked);
+        w.set_can_remove(self.editing.is_some() && !c.managed);
+        w.set_cert_result("".into());
+        w.set_cert_fingerprint("".into());
+        w.set_form_error("".into());
+        w.set_form_info("".into());
+        let index = config
+            .connections()
+            .iter()
+            .position(|x| Some(&x.name) == self.editing.as_ref())
+            .map_or(-1, |i| i as i32);
+        w.set_selected_index(index);
+    }
+
+    /// Saves the form. Returns the connection's name, or `None` if invalid.
+    fn save_form(&mut self) -> Option<String> {
+        let w = self.window.as_ref()?;
+        let mut config = load_config();
+        let original = self.editing.clone();
+        let managed = original.as_deref().is_some_and(|n| config.is_managed(n));
+
+        let (gateway, pin) = if managed {
+            if w.get_username().trim().is_empty() {
+                self.set_form_message("Enter your username.", true);
+                return None;
+            }
+            (String::new(), None)
+        } else {
+            match stayline_config::validate(&w.get_gateway(), &w.get_username(), &w.get_pin()) {
                 Ok(valid) => valid,
                 Err(message) => {
                     self.set_form_message(&message, true);
-                    return false;
+                    return None;
                 }
-            };
-        let password = Zeroizing::new(w.get_password().to_string());
-        let save_password = w.get_save_password();
-
-        let mut settings = Settings::load().unwrap_or_default();
-        settings.gateway = gateway;
-        settings.username = w.get_username().trim().to_owned();
-        settings.realm = Some(w.get_realm().trim().to_owned()).filter(|r| !r.is_empty());
-        settings.pin = pin.clone();
-        if let Err(e) = settings.save() {
+            }
+        };
+        let edit = ConnectionEdit {
+            name: w.get_conn_name().trim().to_owned(),
+            gateway,
+            username: w.get_username().trim().to_owned(),
+            realm: Some(w.get_realm().trim().to_owned()).filter(|r| !r.is_empty()),
+            pin,
+        };
+        if let Err(message) = config.save_connection(original.as_deref(), edit.clone()) {
+            self.set_form_message(&message, true);
+            return None;
+        }
+        let name = if managed {
+            original.clone().unwrap_or_default()
+        } else {
+            edit.name
+        };
+        if config.user.active.is_none() {
+            config.set_active(&name);
+        }
+        if let Err(e) = config.user.save() {
             self.set_form_message(&e.to_string(), true);
-            return false;
+            return None;
+        }
+        if let Some(old) = original.as_deref().filter(|old| *old != name) {
+            if let Err(e) = secret::rename(old, &name) {
+                tracing::warn!(error = %e, "could not move the saved password");
+            }
+            if let Some(p) = self.session_passwords.remove(old) {
+                self.session_passwords.insert(name.clone(), p);
+            }
         }
 
-        let result = if save_password {
+        let password = Zeroizing::new(w.get_password().to_string());
+        let result = if w.get_save_password() {
             if password.is_empty() {
                 Ok(())
             } else {
-                self.session_password = None;
-                secret::save(&password)
+                self.session_passwords.remove(&name);
+                secret::save(&name, &password)
             }
         } else {
             if !password.is_empty() {
-                self.session_password = Some(password.clone());
+                self.session_passwords.insert(name.clone(), password);
             }
-            secret::forget()
+            secret::forget(&name)
         };
         if let Err(e) = result {
             self.set_form_message(&e.to_string(), true);
-            return false;
+            return None;
         }
 
-        w.set_password("".into());
-        w.set_pin(pin.unwrap_or_default().into());
-        w.set_password_saved(secret::is_saved());
-        self.set_form_message("Settings saved.", false);
-        true
+        self.refresh_lists();
+        self.edit_connection(Some(&name));
+        self.set_form_message("Saved.", false);
+        Some(name)
+    }
+
+    fn remove_connection(&mut self) {
+        let Some(name) = self.editing.clone() else {
+            return;
+        };
+        let mut config = load_config();
+        if let Err(message) = config.remove_connection(&name) {
+            self.set_form_message(&message, true);
+            return;
+        }
+        if let Err(e) = config.user.save() {
+            self.set_form_message(&e.to_string(), true);
+            return;
+        }
+        let _ = secret::forget(&name);
+        self.session_passwords.remove(&name);
+        self.refresh_lists();
+        let next = config.connections().into_iter().next().map(|c| c.name);
+        self.edit_connection(next.as_deref());
+        self.set_form_message(&format!("\"{name}\" removed."), false);
+        self.refresh();
     }
 
     fn check_certificate(&mut self) {
@@ -426,9 +646,9 @@ impl App {
 
     fn preferences_changed(&mut self) {
         let Some(w) = &self.window else { return };
-        let mut settings = Settings::load().unwrap_or_default();
-        settings.auto_connect = w.get_auto_connect();
-        if let Err(e) = settings.save() {
+        let mut config = load_config();
+        config.user.auto_connect = w.get_auto_connect();
+        if let Err(e) = config.user.save() {
             toast(&e.to_string());
         }
         let want = w.get_start_at_login();
@@ -457,6 +677,9 @@ impl App {
                     return;
                 }
             }
+            self.refresh_lists();
+            let active = load_config().active().map(|c| c.name);
+            self.edit_connection(active.as_deref());
             self.clock
                 .start(TimerMode::Repeated, Duration::from_secs(1), || {
                     with_app(|app| app.refresh_window())
@@ -477,20 +700,34 @@ impl App {
     fn create_window(&self) -> Result<AppWindow, slint::PlatformError> {
         let w = AppWindow::new()?;
         w.set_version(env!("CARGO_PKG_VERSION").into());
-
-        let settings = Settings::load().unwrap_or_default();
-        w.set_gateway(settings.gateway.clone().into());
-        w.set_username(settings.username.clone().into());
-        w.set_realm(settings.realm.clone().unwrap_or_default().into());
-        w.set_pin(settings.pin.clone().unwrap_or_default().into());
-        w.set_auto_connect(settings.auto_connect);
+        let config = load_config();
+        w.set_auto_connect(config.user.auto_connect);
         w.set_start_at_login(autostart::is_enabled());
-        let saved = secret::is_saved();
-        w.set_password_saved(saved);
-        w.set_save_password(saved || self.session_password.is_none());
 
         w.on_connect(|| with_app(|app| app.connect()));
         w.on_disconnect(|| with_app(|app| app.disconnect()));
+        w.on_choose_active(|index| with_app(move |app| app.choose_active(index)));
+        w.on_trust_and_connect(|| with_app(|app| app.trust_and_connect()));
+        w.on_dismiss_trust(|| {
+            with_app(|app| {
+                app.trust = None;
+                app.refresh();
+            })
+        });
+        w.on_select_connection(|index| {
+            with_app(move |app| {
+                let name = load_config()
+                    .connections()
+                    .into_iter()
+                    .nth(index as usize)
+                    .map(|c| c.name);
+                if name.is_some() {
+                    app.edit_connection(name.as_deref());
+                }
+            })
+        });
+        w.on_add_connection(|| with_app(|app| app.edit_connection(None)));
+        w.on_remove_connection(|| with_app(|app| app.remove_connection()));
         w.on_save_settings(|| {
             with_app(|app| {
                 app.save_form();
@@ -498,12 +735,14 @@ impl App {
         });
         w.on_save_and_connect(|| {
             with_app(|app| {
-                if app.save_form() {
-                    if let Some(w) = &app.window {
-                        w.set_current_tab(TAB_STATUS);
-                    }
-                    app.connect();
+                let Some(name) = app.save_form() else { return };
+                let mut config = load_config();
+                config.set_active(&name);
+                let _ = config.user.save();
+                if let Some(w) = &app.window {
+                    w.set_current_tab(TAB_STATUS);
                 }
+                app.connect();
             })
         });
         w.on_check_certificate(|| with_app(|app| app.check_certificate()));
@@ -530,6 +769,28 @@ impl App {
         }
     }
 
+    /// Fills the connection list and picker.
+    fn refresh_lists(&self) {
+        let Some(w) = &self.window else { return };
+        let config = load_config();
+        let connections = config.connections();
+        let names: Vec<SharedString> = connections.iter().map(|c| c.name.as_str().into()).collect();
+        let items: Vec<StandardListViewItem> = connections
+            .iter()
+            .map(|c| {
+                let label = if c.managed {
+                    format!("{}  (managed)", c.name)
+                } else {
+                    c.name.clone()
+                };
+                StandardListViewItem::from(SharedString::from(label))
+            })
+            .collect();
+        w.set_connection_names(ModelRc::from(Rc::new(VecModel::from(names))));
+        w.set_connection_items(ModelRc::from(Rc::new(VecModel::from(items))));
+        w.set_can_add(config.allow_user_connections());
+    }
+
     /// Updates the tray and, if open, the window.
     fn refresh(&self) {
         let (light, text) = self.describe();
@@ -537,6 +798,11 @@ impl App {
         let tooltip: String = format!("stayline: {text}").chars().take(120).collect();
         let _ = self.tray.set_tooltip(Some(tooltip));
         self.items.status.set_text(format!("Status: {text}"));
+        let active = load_config().active().map(|c| c.name);
+        self.items.connect.set_text(match &active {
+            Some(name) => format!("Connect to {name}"),
+            None => "Connect".to_owned(),
+        });
         self.items.connect.set_enabled(self.can_connect());
         self.items.disconnect.set_enabled(self.can_disconnect());
         self.refresh_window();
@@ -544,6 +810,8 @@ impl App {
 
     fn refresh_window(&self) {
         let Some(w) = &self.window else { return };
+        let config = load_config();
+        let active = config.active();
         let (light, title) = self.describe();
         w.set_app_icon(icons::window_icon(light));
         w.set_state_kind(light.kind());
@@ -554,11 +822,19 @@ impl App {
         w.set_can_disconnect(self.can_disconnect());
         w.set_cert_checking(self.cert_checking);
         w.set_gateway_display(
-            Settings::load()
-                .map(|s| s.gateway)
+            active
+                .as_ref()
+                .map(|c| c.gateway.clone())
                 .unwrap_or_default()
                 .into(),
         );
+        let index = active
+            .as_ref()
+            .and_then(|a| config.connections().iter().position(|c| c.name == a.name))
+            .map_or(-1, |i| i as i32);
+        if w.get_active_index() != index {
+            w.set_active_index(index);
+        }
         w.set_service_status(
             if self.service_up {
                 "Running"
@@ -567,6 +843,15 @@ impl App {
             }
             .into(),
         );
+
+        match &self.trust {
+            Some(prompt) => {
+                w.set_trust_mode(if prompt.changed { 2 } else { 1 });
+                w.set_trust_gateway(prompt.gateway.clone().into());
+                w.set_trust_fingerprint(prompt.fingerprint.clone().into());
+            }
+            None => w.set_trust_mode(0),
+        }
 
         if let TunnelState::Connected {
             local_ip,
@@ -643,7 +928,7 @@ impl App {
             TunnelState::WaitingForNetwork => {
                 "No network connection. stayline reconnects as soon as you are back online.".into()
             }
-            TunnelState::NeedsUser { reason } => capitalise(reason),
+            TunnelState::NeedsUser { reason, .. } => capitalise(reason),
         }
     }
 }
