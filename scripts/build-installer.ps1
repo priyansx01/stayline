@@ -20,7 +20,8 @@ param(
     [string]$Gateway = '',
     [string]$Pin = '',
     [string]$Realm = '',
-    [ValidateSet('yes', 'no')][string]$UserConnections = 'yes',
+    # Connections are IT's job: users cannot add their own unless allowed here.
+    [ValidateSet('yes', 'no')][string]$UserConnections = 'no',
     [ValidateSet('yes', 'no')][string]$TrustPrompt = 'yes',
     [string]$Output = ''
 )

@@ -5,7 +5,8 @@
   A company connection can be built in (build-installer.ps1 -Gateway ...)
   or passed when installing:
     msiexec /i stayline.msi GATEWAY=vpn.example.com:10443 PIN=<sha256> CONNECTIONNAME="Company VPN" /qn
-  Optional: REALM=..., USERCONNECTIONS=no, TRUSTPROMPT=no.
+  Optional: REALM=..., USERCONNECTIONS=yes (let users add their own; default no),
+  TRUSTPROMPT=no.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"

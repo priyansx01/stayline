@@ -5034,7 +5034,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stayline-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "directories",
  "serde",
@@ -5048,7 +5048,7 @@ dependencies = [
 
 [[package]]
 name = "stayline-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "hex",
@@ -5067,7 +5067,7 @@ dependencies = [
 
 [[package]]
 name = "stayline-ipc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -5078,7 +5078,7 @@ dependencies = [
 
 [[package]]
 name = "stayline-net"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "stayline-core",
@@ -5091,7 +5091,7 @@ dependencies = [
 
 [[package]]
 name = "stayline-probe"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "rpassword",
@@ -5105,7 +5105,7 @@ dependencies = [
 
 [[package]]
 name = "stayline-svc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "stayline-config",
@@ -5122,7 +5122,7 @@ dependencies = [
 
 [[package]]
 name = "stayline-tray"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "directories",
