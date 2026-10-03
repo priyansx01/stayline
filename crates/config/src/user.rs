@@ -9,6 +9,16 @@ use crate::{ConfigError, project_dirs, write_atomically};
 /// Name given to the connection converted from single-connection settings.
 pub const LEGACY_NAME: &str = "VPN";
 
+/// Theme appearance mode preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemePreference {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UserSettings {
@@ -17,6 +27,8 @@ pub struct UserSettings {
     /// Start the app at Windows sign-in. The installer registers the app for
     /// every user; it exits right away for users who turned this off.
     pub start_at_login: bool,
+    /// Appearance theme: system (follows Windows), light, or dark.
+    pub theme: ThemePreference,
     /// Name of the connection Connect uses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active: Option<String>,
@@ -42,6 +54,7 @@ impl Default for UserSettings {
         Self {
             auto_connect: true,
             start_at_login: true,
+            theme: ThemePreference::default(),
             active: None,
             connections: Vec::new(),
             gateway: String::new(),

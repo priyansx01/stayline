@@ -10,6 +10,8 @@ mod format;
 mod icons;
 #[cfg(windows)]
 mod instance;
+#[cfg(windows)]
+mod theme;
 
 fn main() {
     #[cfg(windows)]

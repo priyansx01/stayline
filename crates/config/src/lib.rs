@@ -23,7 +23,7 @@ use std::path::Path;
 use stayline_ipc::Profile;
 
 use managed::ManagedConfig;
-use user::{UserConnection, UserSettings};
+pub use user::{ThemePreference, UserConnection, UserSettings};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {

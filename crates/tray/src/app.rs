@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use slint::{
     ComponentHandle, ModelRc, SharedString, StandardListViewItem, Timer, TimerMode, VecModel,
 };
-use stayline_config::{Config, Connection, ConnectionEdit, secret};
+use stayline_config::{secret, Config, Connection, ConnectionEdit, ThemePreference};
 use stayline_ipc::{Attention, CertificateReport, Event, Request, TunnelState};
 use tauri_winrt_notification::Toast;
 use tokio::sync::mpsc;
@@ -23,7 +23,7 @@ use zeroize::Zeroizing;
 
 use crate::client::{self, FromService};
 use crate::icons::{self, Light};
-use crate::{format, instance};
+use crate::{format, instance, theme};
 
 slint::include_modules!();
 
@@ -532,6 +532,7 @@ impl App {
             .position(|x| Some(&x.name) == self.editing.as_ref())
             .map_or(-1, |i| i as i32);
         w.set_selected_index(index);
+        w.set_confirm_delete_open(false);
     }
 
     /// Saves the form. Returns the connection's name, or `None` if invalid.
@@ -631,6 +632,9 @@ impl App {
         self.refresh_lists();
         let next = config.connections().into_iter().next().map(|c| c.name);
         self.edit_connection(next.as_deref());
+        if let Some(w) = &self.window {
+            w.set_confirm_delete_open(false);
+        }
         self.set_form_message(&format!("\"{name}\" removed."), false);
         self.refresh();
     }
@@ -716,8 +720,17 @@ impl App {
         w.set_auto_connect(config.user.auto_connect);
         w.set_start_at_login(config.user.start_at_login);
 
+        let theme_mode = match config.user.theme {
+            ThemePreference::Light => 0,
+            ThemePreference::Dark => 1,
+            ThemePreference::System => 2,
+        };
+        w.set_theme_mode(theme_mode);
+        w.set_is_dark(theme::resolve_is_dark(config.user.theme));
+
         w.on_connect(|| with_app(|app| app.connect()));
         w.on_disconnect(|| with_app(|app| app.disconnect()));
+        w.on_cancel_connect(|| with_app(|app| app.disconnect()));
         w.on_choose_active(|index| with_app(move |app| app.choose_active(index)));
         w.on_trust_and_connect(|| with_app(|app| app.trust_and_connect()));
         w.on_dismiss_trust(|| {
@@ -739,6 +752,20 @@ impl App {
             })
         });
         w.on_add_connection(|| with_app(|app| app.edit_connection(None)));
+        w.on_request_delete_connection(|| {
+            with_app(|app| {
+                if let Some(w) = &app.window {
+                    w.set_confirm_delete_open(true);
+                }
+            })
+        });
+        w.on_cancel_delete_connection(|| {
+            with_app(|app| {
+                if let Some(w) = &app.window {
+                    w.set_confirm_delete_open(false);
+                }
+            })
+        });
         w.on_remove_connection(|| with_app(|app| app.remove_connection()));
         w.on_save_settings(|| {
             with_app(|app| {
@@ -760,9 +787,33 @@ impl App {
         w.on_check_certificate(|| with_app(|app| app.check_certificate()));
         w.on_trust_certificate(|| with_app(|app| app.trust_certificate()));
         w.on_preferences_changed(|| with_app(|app| app.preferences_changed()));
+        w.on_theme_changed(|mode| {
+            with_app(move |app| {
+                let preference = match mode {
+                    0 => ThemePreference::Light,
+                    1 => ThemePreference::Dark,
+                    _ => ThemePreference::System,
+                };
+                let mut config = load_config();
+                config.user.theme = preference;
+                if let Err(e) = config.user.save() {
+                    toast(&e.to_string());
+                }
+                if let Some(w) = &app.window {
+                    w.set_is_dark(theme::resolve_is_dark(preference));
+                }
+            })
+        });
         w.on_open_logs(open_logs);
         w.on_open_notices(open_notices);
-        w.set_components(components());
+        w.on_filter_components(|query| {
+            with_app(move |app| {
+                if let Some(w) = &app.window {
+                    w.set_components(filtered_components(query.as_str()));
+                }
+            })
+        });
+        w.set_components(filtered_components(""));
         w.window().on_close_requested(|| {
             // Drop the window once this callback has returned.
             Timer::single_shot(Duration::ZERO, || {
@@ -825,6 +876,12 @@ impl App {
     fn refresh_window(&self) {
         let Some(w) = &self.window else { return };
         let config = load_config();
+        if config.user.theme == ThemePreference::System {
+            let dark = theme::is_windows_dark_theme();
+            if w.get_is_dark() != dark {
+                w.set_is_dark(dark);
+            }
+        }
         let active = config.active();
         let (light, title) = self.describe();
         w.set_app_icon(icons::window_icon(light));
@@ -986,16 +1043,28 @@ fn toast(text: &str) {
 /// `scripts\gen-notices.ps1` as `name<TAB>version<TAB>licence` lines.
 const THIRD_PARTY: &str = include_str!("../third-party.txt");
 
-fn components() -> ModelRc<Component> {
+fn filtered_components(query: &str) -> ModelRc<Component> {
+    let q = query.trim().to_lowercase();
     let rows: Vec<Component> = THIRD_PARTY
         .lines()
         .filter_map(|line| {
             let mut parts = line.splitn(3, '\t');
-            Some(Component {
-                name: parts.next()?.into(),
-                version: parts.next()?.into(),
-                license: parts.next()?.into(),
-            })
+            let name = parts.next()?;
+            let version = parts.next()?;
+            let license = parts.next()?;
+            if q.is_empty()
+                || name.to_lowercase().contains(&q)
+                || version.to_lowercase().contains(&q)
+                || license.to_lowercase().contains(&q)
+            {
+                Some(Component {
+                    name: name.into(),
+                    version: version.into(),
+                    license: license.into(),
+                })
+            } else {
+                None
+            }
         })
         .collect();
     ModelRc::from(Rc::new(VecModel::from(rows)))
