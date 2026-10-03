@@ -1,28 +1,6 @@
-// Copyright © stayline contributors
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// stayline window: dark sidebar navigation, light content with rounded panels.
 
-import {
-    NavigationRail,
-    FilledButton,
-    OutlineButton,
-    TonalButton,
-    IconButton,
-    ElevatedCard,
-    OutlinedCard,
-    FilledCard,
-    Switch,
-    SegmentedButton,
-    SegmentedItem,
-    TextField,
-    Badge,
-    LinearProgressIndicator,
-    CircularProgressIndicator,
-    MaterialPalette,
-    MaterialStyleMetrics,
-    MaterialTypography,
-    NavigationItem,
-} from "@material/material.slint";
-import { AboutSlint, Palette, ScrollView, StandardListView, ComboBox, ListView } from "std-widgets.slint";
+import { AboutSlint, ListView, ScrollView } from "std-widgets.slint";
 
 export struct Component {
     name: string,
@@ -30,109 +8,556 @@ export struct Component {
     license: string,
 }
 
-// Status dot with glowing aura ring for Material/Glass aesthetic
-component StatusIndicator inherits Rectangle {
-    in property <int> kind; // 0 = off, 1 = busy, 2 = on, 3 = alert
-    width: 32px;
-    height: 32px;
+export global Theme {
+    in-out property <bool> dark: false;
 
-    property <color> core-color: kind == 2 ? #30d158 : kind == 1 ? #ff9f0a : kind == 3 ? #ff453a : #8e8e93;
+    out property <color> sidebar: dark ? #13162a : #1f2340;
+    out property <color> sidebar-text: #a3a8c3;
+    out property <color> page: dark ? #0f1220 : #f3f4f9;
+    out property <color> panel: dark ? #191d31 : #ffffff;
+    out property <color> panel-alt: dark ? #20253c : #f5f6fb;
+    out property <color> border: dark ? #2a2f48 : #e6e8f0;
+    out property <color> border-strong: dark ? #3a4060 : #cfd3e1;
+    out property <color> text: dark ? #e9ebf5 : #1d2033;
+    out property <color> muted: dark ? #8d92ad : #858aa3;
+    out property <color> accent: #2f7bff;
+    out property <color> accent-soft: dark ? #2f7bff33 : #2f7bff17;
+    out property <color> success: #22c55e;
+    out property <color> warning: #f59e0b;
+    out property <color> danger: #ef4444;
+    out property <color> danger-soft: dark ? #ef444429 : #ef444414;
+    out property <color> shadow: dark ? #00000000 : #1f23400d;
 
-    // Outer ambient glowing aura
-    Rectangle {
-        width: 100%;
-        height: 100%;
-        border-radius: self.width / 2;
-        background: root.core-color.with-alpha(0.18);
-    }
-
-    // Mid ring
-    Rectangle {
-        width: 22px;
-        height: 22px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        border-radius: self.width / 2;
-        background: root.core-color.with-alpha(0.35);
-    }
-
-    // Vibrant core dot
-    Rectangle {
-        width: 14px;
-        height: 14px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        border-radius: self.width / 2;
-        background: root.core-color;
+    // 0 = off, 1 = busy, 2 = on, 3 = needs attention
+    public pure function state-color(kind: int) -> color {
+        kind == 2 ? success : kind == 1 ? warning : kind == 3 ? danger : muted
     }
 }
 
-component DefinitionRow inherits HorizontalLayout {
-    in property <string> label;
-    in property <string> value;
-    spacing: 12px;
-    alignment: space-between;
-
-    Text {
-        text: label;
-        width: 140px;
-        color: MaterialPalette.on_surface_variant;
-        font-size: 13px;
-        vertical-alignment: center;
-    }
-    Text {
-        text: value != "" ? value : "–";
-        horizontal-stretch: 1;
-        overflow: elide;
-        color: MaterialPalette.on_surface;
-        font-size: 13px;
-        font-weight: 500;
-        vertical-alignment: center;
-    }
-}
-
-component InfoBanner inherits Rectangle {
-    in property <string> text;
-    in property <bool> is-error: true;
-
-    border-radius: 8px;
+component Panel inherits Rectangle {
+    background: Theme.panel;
+    border-radius: 16px;
     border-width: 1px;
-    border-color: is-error ? MaterialPalette.error : MaterialPalette.primary;
-    background: is-error ? MaterialPalette.error_container : MaterialPalette.primary_container;
+    border-color: Theme.border;
+    drop-shadow-blur: 16px;
+    drop-shadow-offset-y: 4px;
+    drop-shadow-color: Theme.shadow;
+}
+
+component Caption inherits Text {
+    font-size: 11px;
+    font-weight: 600;
+    color: Theme.muted;
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.border;
+}
+
+component NavRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    in property <bool> active;
+    callback clicked;
+
+    height: 36px;
+    border-radius: 10px;
+    background: active ? #ffffff14 : touch.has-hover ? #ffffff0a : transparent;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    if root.active: Rectangle {
+        x: 0;
+        y: (parent.height - self.height) / 2;
+        width: 3px;
+        height: 16px;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
 
     HorizontalLayout {
         padding-left: 14px;
-        padding-right: 14px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-        spacing: 10px;
+        padding-right: 10px;
+        spacing: 11px;
+
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: root.icon;
+                width: 16px;
+                height: 16px;
+                colorize: root.active ? Theme.accent : Theme.sidebar-text;
+            }
+        }
 
         Text {
             text: root.text;
-            wrap: word-wrap;
-            color: root.is-error ? MaterialPalette.on_error_container : MaterialPalette.on_primary_container;
-            font-size: 13px;
+            font-size: 12px;
+            font-weight: root.active ? 600 : 400;
+            color: root.active ? #ffffff : Theme.sidebar-text;
             vertical-alignment: center;
         }
+    }
+}
+
+// kind: 0 = primary, 1 = secondary, 2 = danger, 3 = text
+component Button inherits Rectangle {
+    in property <string> text;
+    in property <int> kind: 0;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    property <color> base: kind == 0 ? Theme.accent : kind == 2 ? Theme.danger : kind == 1 ? Theme.panel-alt : transparent;
+    property <color> label-color: kind == 0 || kind == 2 ? #ffffff : kind == 3 ? Theme.accent : Theme.text;
+
+    height: 32px;
+    border-radius: 9px;
+    border-width: kind == 1 ? 1px : 0px;
+    border-color: Theme.border;
+    background: !enabled ? base : touch.pressed ? base.darker(0.14) : touch.has-hover ? (kind == 3 ? Theme.accent-soft : base.darker(0.07)) : base;
+    opacity: enabled ? 1 : 0.45;
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: root.kind == 3 ? 8px : 14px;
+        padding-right: root.kind == 3 ? 8px : 14px;
+        Text {
+            text: root.text;
+            font-size: 12px;
+            font-weight: 600;
+            color: root.label-color;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component Field inherits VerticalLayout {
+    in property <string> label;
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <string> hint;
+    in property <bool> password;
+    in property <bool> read-only;
+    in property <bool> mono;
+    callback edited(string);
+
+    property <bool> reveal;
+    spacing: 4px;
+
+    if root.label != "": Caption {
+        text: root.label;
+    }
+
+    Rectangle {
+        height: 32px;
+        border-radius: 8px;
+        background: root.read-only ? Theme.panel-alt : Theme.panel;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.accent : Theme.border;
+
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 8px;
+            spacing: 6px;
+
+            input := TextInput {
+                text <=> root.text;
+                read-only: root.read-only;
+                single-line: true;
+                font-size: root.mono ? 11px : 12px;
+                font-family: root.mono ? "Consolas" : "Segoe UI";
+                color: Theme.text;
+                selection-background-color: Theme.accent-soft;
+                vertical-alignment: center;
+                input-type: root.password && !root.reveal ? InputType.password : InputType.text;
+                edited => {
+                    root.edited(self.text);
+                }
+            }
+
+            if root.password: VerticalLayout {
+                alignment: center;
+                Image {
+                    source: root.reveal ? @image-url("icons/visibility_off.svg") : @image-url("icons/visibility.svg");
+                    width: 15px;
+                    height: 15px;
+                    colorize: Theme.muted;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.reveal = !root.reveal;
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.text == "" && root.placeholder != "": Text {
+            x: 11px;
+            height: parent.height;
+            text: root.placeholder;
+            font-size: 12px;
+            color: Theme.muted.with-alpha(0.75);
+            vertical-alignment: center;
+        }
+    }
+
+    if root.hint != "": Text {
+        text: root.hint;
+        font-size: 11px;
+        color: Theme.muted;
+        wrap: word-wrap;
+    }
+}
+
+component Toggle inherits Rectangle {
+    in-out property <bool> checked;
+    callback toggled;
+
+    width: 34px;
+    height: 20px;
+    border-radius: 10px;
+    background: checked ? Theme.accent : Theme.border-strong;
+    animate background { duration: 120ms; }
+
+    Rectangle {
+        y: 3px;
+        x: root.checked ? parent.width - self.width - 3px : 3px;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: #ffffff;
+        animate x {
+            duration: 120ms;
+            easing: ease-out;
+        }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled();
+        }
+    }
+}
+
+component StatusDot inherits Rectangle {
+    in property <int> kind;
+    width: 40px;
+    height: 40px;
+    border-radius: 20px;
+    background: Theme.state-color(kind).with-alpha(0.14);
+
+    Rectangle {
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: Theme.state-color(root.kind);
+    }
+}
+
+component Chip inherits Rectangle {
+    in property <string> text;
+    in property <color> dot;
+    height: 24px;
+    border-radius: 12px;
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 6px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 7px;
+                height: 7px;
+                border-radius: 4px;
+                background: root.dot;
+            }
+        }
+        Text {
+            text: root.text;
+            font-size: 11px;
+            color: Theme.text;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component StatTile inherits Rectangle {
+    in property <image> icon;
+    in property <string> value;
+    in property <string> caption;
+
+    border-radius: 14px;
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
+    drop-shadow-blur: 12px;
+    drop-shadow-offset-y: 3px;
+    drop-shadow-color: Theme.shadow;
+    min-height: 82px;
+    min-width: 0px;
+    preferred-width: 100px;
+    horizontal-stretch: 1;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 5px;
+        alignment: center;
+
+        HorizontalLayout {
+            alignment: center;
+            Image {
+                source: root.icon;
+                width: 15px;
+                height: 15px;
+                colorize: Theme.accent;
+            }
+        }
+        Text {
+            text: root.value;
+            font-size: 14px;
+            font-weight: 600;
+            color: Theme.text;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: root.caption;
+            font-size: 11px;
+            color: Theme.muted;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+component Banner inherits Rectangle {
+    in property <string> text;
+    in property <bool> error: true;
+
+    border-radius: 10px;
+    background: error ? Theme.danger-soft : Theme.accent-soft;
+
+    HorizontalLayout {
+        padding: 10px;
+        Text {
+            text: root.text;
+            wrap: word-wrap;
+            font-size: 12px;
+            color: root.error ? Theme.danger : Theme.text;
+        }
+    }
+}
+
+component Select inherits Rectangle {
+    in property <[string]> model;
+    in-out property <int> current-index;
+    in property <bool> enabled: true;
+    in property <string> placeholder: "Choose a profile";
+    callback selected(int);
+
+    height: 32px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: Theme.panel;
+    opacity: enabled ? 1 : 0.55;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 6px;
+        Text {
+            text: root.current-index >= 0 && root.current-index < root.model.length ? root.model[root.current-index] : root.placeholder;
+            font-size: 12px;
+            color: Theme.text;
+            overflow: elide;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: "▾";
+            font-size: 11px;
+            color: Theme.muted;
+            vertical-alignment: center;
+        }
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            popup.show();
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 4px;
+        width: root.width;
+
+        Rectangle {
+            background: Theme.panel;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.border;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #00000026;
+
+            VerticalLayout {
+                padding: 4px;
+                for item[i] in root.model: Rectangle {
+                    height: 28px;
+                    border-radius: 6px;
+                    background: i == root.current-index ? Theme.accent-soft : row.has-hover ? Theme.panel-alt : transparent;
+                    Text {
+                        x: 8px;
+                        height: parent.height;
+                        text: item;
+                        font-size: 12px;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                    }
+                    row := TouchArea {
+                        clicked => {
+                            root.current-index = i;
+                            root.selected(i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component Segmented inherits Rectangle {
+    in property <[string]> items;
+    in-out property <int> current;
+    callback changed(int);
+
+    height: 30px;
+    border-radius: 9px;
+    background: Theme.panel-alt;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 2px;
+        for item[i] in root.items: Rectangle {
+            border-radius: 7px;
+            background: i == root.current ? Theme.panel : transparent;
+            drop-shadow-blur: i == root.current ? 4px : 0px;
+            drop-shadow-color: #0000001a;
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                Text {
+                    text: item;
+                    font-size: 11px;
+                    font-weight: i == root.current ? 600 : 400;
+                    color: i == root.current ? Theme.text : Theme.muted;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.current = i;
+                    root.changed(i);
+                }
+            }
+        }
+    }
+}
+
+component SettingRow inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> description;
+    spacing: 16px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+
+    VerticalLayout {
+        spacing: 2px;
+        alignment: center;
+        horizontal-stretch: 1;
+        Text {
+            text: root.title;
+            font-size: 12px;
+            font-weight: 600;
+            color: Theme.text;
+        }
+        if root.description != "": Text {
+            text: root.description;
+            font-size: 11px;
+            color: Theme.muted;
+            wrap: word-wrap;
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        @children
+    }
+}
+
+component InfoRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing: 12px;
+    Text {
+        text: root.label;
+        width: 90px;
+        font-size: 12px;
+        color: Theme.muted;
+    }
+    Text {
+        text: root.value != "" ? root.value : "–";
+        font-size: 12px;
+        color: Theme.text;
+        overflow: elide;
+        horizontal-stretch: 1;
     }
 }
 
 export component AppWindow inherits Window {
     title: "stayline";
     icon: @image-url("icons/stayline-emblem.png");
-    background: MaterialPalette.surface;
-    min-width: 680px;
-    min-height: 600px;
-    preferred-width: 768px;
-    preferred-height: 780px;
+    background: Theme.page;
+    default-font-family: "Segoe UI";
+    default-font-size: 12px;
+    min-width: 760px;
+    min-height: 500px;
+    preferred-width: 840px;
+    preferred-height: 560px;
 
     in property <string> version;
 
-    // Appearance / Theme
-    in-out property <bool> is-dark <=> MaterialPalette.dark_color_scheme;
-    in-out property <int> theme-mode: 2; // 0 = Light, 1 = Dark, 2 = System
+    // Appearance: theme-mode 0 = Light, 1 = Dark, 2 = System
+    in-out property <bool> is-dark <=> Theme.dark;
+    in-out property <int> theme-mode: 2;
 
-    // Navigation (0 = Status, 1 = Connections, 2 = Preferences, 3 = About)
+    // 0 = Status, 1 = Profiles, 2 = Settings, 3 = About
     in-out property <int> current-tab: 0;
 
     // Connections
@@ -154,12 +579,12 @@ export component AppWindow inherits Window {
     in property <bool> can-disconnect;
     in property <bool> needs-attention;
 
-    // Certificate trust prompts (0 = none, 1 = first connection, 2 = cert changed)
+    // 0 = none, 1 = first connection (may trust), 2 = certificate changed
     in property <int> trust-mode;
     in property <string> trust-gateway;
     in property <string> trust-fingerprint;
 
-    // Connection form
+    // Profile form
     in-out property <string> conn-name;
     in-out property <string> gateway;
     in-out property <string> username;
@@ -174,10 +599,8 @@ export component AppWindow inherits Window {
     in property <bool> can-remove;
     in property <string> form-error;
     in property <string> form-info;
-    in-out property <bool> password-visible: false;
-
-    // Delete confirmation dialog state
-    in-out property <bool> confirm-delete-open: false;
+    in-out property <bool> password-visible;
+    in-out property <bool> confirm-delete-open;
 
     // Certificate check
     in property <bool> cert-checking;
@@ -185,14 +608,14 @@ export component AppWindow inherits Window {
     in property <string> cert-fingerprint;
     in property <bool> cert-public;
 
-    // Preferences
+    // Settings
     in-out property <bool> auto-connect;
     in-out property <bool> start-at-login;
     in property <string> service-status;
 
-    // About & Components
+    // About
     in property <[Component]> components;
-    in-out property <string> search-query: "";
+    in-out property <string> search-query;
 
     callback connect();
     callback disconnect();
@@ -215,886 +638,840 @@ export component AppWindow inherits Window {
     callback open-notices();
     callback filter-components(string);
 
-    VerticalLayout {
-        padding: 0;
-        spacing: 0;
+    property <bool> service-running: root.service-status == "Running";
 
-        // Persistent Top Title Bar
+    HorizontalLayout {
+        // ---- Sidebar ----
         Rectangle {
-            height: 48px;
-            background: MaterialPalette.surface_container_lowest;
+            width: 196px;
+            background: Theme.sidebar;
 
-            Rectangle {
-                y: parent.height - 1px;
-                height: 1px;
-                background: MaterialPalette.outline_variant;
-            }
-
-            HorizontalLayout {
-                padding-left: 20px;
-                padding-right: 20px;
-                alignment: space-between;
+            VerticalLayout {
+                padding: 16px;
+                padding-top: 22px;
+                spacing: 4px;
 
                 HorizontalLayout {
                     spacing: 10px;
+                    padding-left: 6px;
+                    padding-bottom: 22px;
                     alignment: start;
-
-                    Image {
-                        source: @image-url("icons/stayline-emblem.png");
-                        width: 22px;
-                        height: 22px;
-                        image-fit: contain;
-                        vertical-alignment: center;
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            source: @image-url("icons/stayline-emblem.png");
+                            width: 24px;
+                            height: 24px;
+                            image-fit: contain;
+                        }
                     }
-
                     Text {
                         text: "stayline";
                         font-size: 16px;
                         font-weight: 700;
-                        color: MaterialPalette.on_surface;
+                        color: #ffffff;
                         vertical-alignment: center;
                     }
                 }
 
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: end;
-
-                    Rectangle {
-                        width: 8px;
-                        height: 8px;
-                        border-radius: 4px;
-                        y: (parent.height - self.height) / 2;
-                        background: root.state-kind == 2 ? #30d158 : root.state-kind == 1 ? #ff9f0a : root.state-kind == 3 ? #ff453a : #8e8e93;
+                NavRow {
+                    icon: @image-url("icons/activity.svg");
+                    text: "Status";
+                    active: root.current-tab == 0;
+                    clicked => {
+                        root.current-tab = 0;
                     }
+                }
+                NavRow {
+                    icon: @image-url("icons/lan.svg");
+                    text: "Profiles";
+                    active: root.current-tab == 1;
+                    clicked => {
+                        root.current-tab = 1;
+                    }
+                }
+                NavRow {
+                    icon: @image-url("icons/tune.svg");
+                    text: "Settings";
+                    active: root.current-tab == 2;
+                    clicked => {
+                        root.current-tab = 2;
+                    }
+                }
+                NavRow {
+                    icon: @image-url("icons/info.svg");
+                    text: "About";
+                    active: root.current-tab == 3;
+                    clicked => {
+                        root.current-tab = 3;
+                    }
+                }
 
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    spacing: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 7px;
+                            height: 7px;
+                            border-radius: 4px;
+                            background: root.service-running ? Theme.success : Theme.danger;
+                        }
+                    }
                     Text {
-                        text: root.state-title;
-                        font-size: 13px;
-                        color: MaterialPalette.on_surface_variant;
+                        text: root.service-running ? "Service running" : "Service not running";
+                        font-size: 11px;
+                        color: Theme.sidebar-text;
                         vertical-alignment: center;
                     }
+                }
+                Text {
+                    x: 8px;
+                    text: "Version " + root.version;
+                    font-size: 10px;
+                    color: Theme.sidebar-text.with-alpha(0.6);
                 }
             }
         }
 
-        // Main Horizontal Area: Left NavigationRail + Right Content Workspace
-        HorizontalLayout {
-            padding: 0;
-            spacing: 0;
+        // ---- Content ----
+        VerticalLayout {
+            padding: 20px;
+            padding-top: 18px;
+            spacing: 14px;
             horizontal-stretch: 1;
 
-            // Left Navigation Rail
-            NavigationRail {
-                width: 84px;
-                current_index: root.current-tab;
-                index_changed(idx) => {
-                    root.current-tab = idx;
+            // Page header
+            HorizontalLayout {
+                spacing: 12px;
+                VerticalLayout {
+                    spacing: 2px;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: root.current-tab == 0 ? "Status" : root.current-tab == 1 ? "Profiles" : root.current-tab == 2 ? "Settings" : "About";
+                        font-size: 18px;
+                        font-weight: 600;
+                        color: Theme.text;
+                    }
+                    Text {
+                        text: root.current-tab == 0 ? "Your VPN connection at a glance" : root.current-tab == 1 ? "Gateways and sign-in details" : root.current-tab == 2 ? "Startup, appearance and troubleshooting" : "Version, licences and credits";
+                        font-size: 11px;
+                        color: Theme.muted;
+                    }
                 }
-
-                items: [
-                    {
-                        text: "Status",
-                        icon: @image-url("icons/activity.svg"),
-                        selected_icon: @image-url("icons/activity.svg"),
-                    },
-                    {
-                        text: "Profiles",
-                        icon: @image-url("icons/lan.svg"),
-                        selected_icon: @image-url("icons/lan.svg"),
-                    },
-                    {
-                        text: "Settings",
-                        icon: @image-url("icons/tune.svg"),
-                        selected_icon: @image-url("icons/tune.svg"),
-                    },
-                    {
-                        text: "About",
-                        icon: @image-url("icons/info.svg"),
-                        selected_icon: @image-url("icons/info.svg"),
-                    },
-                ];
             }
 
-            // Vertical Divider
-            Rectangle {
-                width: 1px;
-                background: MaterialPalette.outline_variant;
-            }
+            // ---- Status ----
+            if root.current-tab == 0: VerticalLayout {
+                spacing: 14px;
+                alignment: start;
+                vertical-stretch: 1;
 
-            // Right Content Canvas
-            Rectangle {
-                horizontal-stretch: 1;
-                background: MaterialPalette.surface;
-
-                // 1. STATUS VIEW
-                if root.current-tab == 0: ScrollView {
+                Panel {
                     VerticalLayout {
-                        padding: 24px;
-                        spacing: 20px;
-                        alignment: start;
+                        padding: 18px;
+                        spacing: 14px;
 
-                        // Hero Status Card
-                        ElevatedCard {
+                        HorizontalLayout {
+                            spacing: 14px;
+                            StatusDot {
+                                kind: root.state-kind;
+                            }
                             VerticalLayout {
-                                padding: 20px;
-                                spacing: 14px;
-
-                                HorizontalLayout {
-                                    spacing: 16px;
-                                    alignment: start;
-
-                                    StatusIndicator {
-                                        kind: root.state-kind;
-                                        y: 2px;
-                                    }
-
-                                    VerticalLayout {
-                                        spacing: 4px;
-                                        horizontal-stretch: 1;
-
-                                        Text {
-                                            text: root.state-title;
-                                            font-size: 22px;
-                                            font-weight: 700;
-                                            color: MaterialPalette.on_surface;
-                                        }
-
-                                        Text {
-                                            text: root.state-detail != "" ? root.state-detail : "The VPN is disconnected.";
-                                            wrap: word-wrap;
-                                            font-size: 13px;
-                                            color: MaterialPalette.on_surface_variant;
-                                        }
-                                    }
+                                spacing: 3px;
+                                alignment: center;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: root.state-title;
+                                    font-size: 16px;
+                                    font-weight: 600;
+                                    color: Theme.text;
                                 }
-
-                                if root.state-kind == 1: LinearProgressIndicator {
-                                    indeterminate: true;
+                                Text {
+                                    text: root.state-detail;
+                                    font-size: 12px;
+                                    color: Theme.muted;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    if root.state-kind == 1: Button {
+                                        text: "Cancel";
+                                        kind: 1;
+                                        clicked => {
+                                            root.cancel-connect();
+                                        }
+                                    }
+                                    if root.can-disconnect: Button {
+                                        text: "Disconnect";
+                                        kind: 1;
+                                        clicked => {
+                                            root.disconnect();
+                                        }
+                                    }
+                                    if !root.can-disconnect: Button {
+                                        text: "Connect";
+                                        enabled: root.can-connect && root.connection-names.length > 0;
+                                        clicked => {
+                                            root.connect();
+                                        }
+                                    }
                                 }
                             }
                         }
 
-                        // Certificate Prompts
-                        if root.trust-mode == 1: OutlinedCard {
+                        if root.trust-mode == 1: Rectangle {
+                            border-radius: 10px;
+                            background: Theme.warning.with-alpha(0.10);
                             VerticalLayout {
-                                padding: 18px;
-                                spacing: 12px;
-
+                                padding: 12px;
+                                spacing: 8px;
                                 Text {
                                     text: "First connection to " + root.trust-gateway;
-                                    font-size: 16px;
+                                    font-size: 12px;
                                     font-weight: 600;
-                                    color: MaterialPalette.on_surface;
+                                    color: Theme.text;
                                 }
                                 Text {
-                                    text: "This gateway uses a self-signed or enterprise certificate. Confirm that the SHA-256 fingerprint matches your IT department's reference before trusting it:";
+                                    text: "The gateway's certificate is not issued by a public authority. Check that this fingerprint matches the one from your IT department; stayline will remember it and warn you if it changes.";
+                                    font-size: 11px;
+                                    color: Theme.muted;
                                     wrap: word-wrap;
-                                    font-size: 13px;
-                                    color: MaterialPalette.on_surface_variant;
                                 }
-                                Rectangle {
-                                    background: MaterialPalette.surface_container_highest;
-                                    border-radius: 6px;
-                                    HorizontalLayout {
-                                        padding: 10px;
-                                        Text {
-                                            text: root.trust-fingerprint;
-                                            font-family: "Consolas";
-                                            font-size: 12px;
-                                            wrap: word-wrap;
-                                            color: MaterialPalette.on_surface;
-                                        }
-                                    }
+                                Text {
+                                    text: root.trust-fingerprint;
+                                    font-family: "Consolas";
+                                    font-size: 11px;
+                                    color: Theme.text;
+                                    wrap: word-wrap;
                                 }
                                 HorizontalLayout {
-                                    spacing: 12px;
+                                    spacing: 8px;
                                     alignment: end;
-                                    OutlineButton {
+                                    Button {
                                         text: "Cancel";
-                                        clicked => { root.dismiss-trust(); }
+                                        kind: 1;
+                                        clicked => {
+                                            root.dismiss-trust();
+                                        }
                                     }
-                                    FilledButton {
+                                    Button {
                                         text: "Trust and connect";
-                                        clicked => { root.trust-and-connect(); }
-                                    }
-                                }
-                            }
-                        }
-
-                        if root.trust-mode == 2: OutlinedCard {
-                            VerticalLayout {
-                                padding: 18px;
-                                spacing: 12px;
-
-                                Text {
-                                    text: "Security Alert: Gateway Certificate Changed";
-                                    font-size: 16px;
-                                    font-weight: 700;
-                                    color: MaterialPalette.error;
-                                }
-                                Text {
-                                    text: "The gateway's certificate has changed unexpectedly. stayline will not connect to protect your credentials. Please contact your IT administrator.";
-                                    wrap: word-wrap;
-                                    font-size: 13px;
-                                    color: MaterialPalette.on_surface;
-                                }
-                                Rectangle {
-                                    background: MaterialPalette.error_container;
-                                    border-radius: 6px;
-                                    HorizontalLayout {
-                                        padding: 10px;
-                                        Text {
-                                            text: root.trust-fingerprint;
-                                            font-family: "Consolas";
-                                            font-size: 12px;
-                                            wrap: word-wrap;
-                                            color: MaterialPalette.on_error_container;
+                                        clicked => {
+                                            root.trust-and-connect();
                                         }
                                     }
                                 }
                             }
                         }
 
-                        if root.needs-attention && root.trust-mode == 0: InfoBanner {
-                            text: "stayline stopped retrying because credentials or settings need your attention. Check the Profiles tab.";
-                            is-error: true;
-                        }
-
-                        // Connection Details
-                        OutlinedCard {
+                        if root.trust-mode == 2: Rectangle {
+                            border-radius: 10px;
+                            background: Theme.danger-soft;
                             VerticalLayout {
-                                padding: 20px;
-                                spacing: 12px;
-
+                                padding: 12px;
+                                spacing: 6px;
                                 Text {
-                                    text: "Connection Details";
-                                    font-size: 15px;
+                                    text: "The gateway's certificate has changed";
+                                    font-size: 12px;
                                     font-weight: 600;
-                                    color: MaterialPalette.on_surface;
+                                    color: Theme.danger;
                                 }
-
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    alignment: space-between;
-
-                                    Text {
-                                        text: "Active Profile";
-                                        width: 140px;
-                                        color: MaterialPalette.on_surface_variant;
-                                        font-size: 13px;
-                                        vertical-alignment: center;
-                                    }
-
-                                    ComboBox {
-                                        model: root.connection-names;
-                                        current-index <=> root.active-index;
-                                        enabled: root.can-connect;
-                                        selected => {
-                                            root.choose-active(self.current-index);
-                                        }
-                                    }
+                                Text {
+                                    text: "This can mean someone is intercepting your connection. stayline will not connect. Contact your IT department.";
+                                    font-size: 11px;
+                                    color: Theme.text;
+                                    wrap: word-wrap;
                                 }
-
-                                DefinitionRow { label: "Gateway"; value: root.gateway-display; }
-                                DefinitionRow { label: "Tunnel IP"; value: root.tunnel-ip; }
-                                DefinitionRow { label: "Connected for"; value: root.connected-for; }
-                                DefinitionRow { label: "Sent"; value: root.sent; }
-                                DefinitionRow { label: "Received"; value: root.received; }
+                                Text {
+                                    text: root.trust-fingerprint;
+                                    font-family: "Consolas";
+                                    font-size: 11px;
+                                    color: Theme.text;
+                                    wrap: word-wrap;
+                                }
                             }
                         }
 
-                        // Primary Action Bar
+                        if root.needs-attention && root.trust-mode == 0: Banner {
+                            text: "stayline stopped retrying because something needs your attention. Check the profile, then connect again.";
+                        }
+
+                        Divider { }
+
                         HorizontalLayout {
                             spacing: 12px;
-                            alignment: end;
-
-                            if root.can-disconnect: OutlineButton {
-                                text: "Disconnect";
-                                clicked => { root.disconnect(); }
+                            Caption {
+                                text: "PROFILE";
+                                vertical-alignment: center;
+                                width: 60px;
                             }
-
-                            if root.state-kind == 1: OutlineButton {
-                                text: "Cancel";
-                                clicked => { root.cancel-connect(); }
+                            if root.connection-names.length > 0: Select {
+                                model: root.connection-names;
+                                current-index <=> root.active-index;
+                                enabled: root.can-connect;
+                                selected(index) => {
+                                    root.choose-active(index);
+                                }
                             }
-
-                            if root.can-connect: FilledButton {
-                                text: "Connect";
-                                clicked => { root.connect(); }
+                            if root.connection-names.length == 0: HorizontalLayout {
+                                spacing: 6px;
+                                Text {
+                                    text: "No profile yet.";
+                                    font-size: 12px;
+                                    color: Theme.muted;
+                                    vertical-alignment: center;
+                                }
+                                Button {
+                                    text: "Add a profile";
+                                    kind: 3;
+                                    clicked => {
+                                        root.current-tab = 1;
+                                    }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                }
                             }
+                        }
+                        InfoRow {
+                            label: "Gateway";
+                            value: root.gateway-display;
                         }
                     }
                 }
 
-                // 2. CONNECTIONS VIEW (Master-Detail)
-                if root.current-tab == 1: HorizontalLayout {
-                    padding: 20px;
-                    spacing: 16px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    StatTile {
+                        icon: @image-url("icons/schedule.svg");
+                        value: root.connected-for;
+                        caption: "Connected for";
+                    }
+                    StatTile {
+                        icon: @image-url("icons/lan.svg");
+                        value: root.tunnel-ip;
+                        caption: "Tunnel address";
+                    }
+                    StatTile {
+                        icon: @image-url("icons/arrow_up.svg");
+                        value: root.sent;
+                        caption: "Sent";
+                    }
+                    StatTile {
+                        icon: @image-url("icons/arrow_down.svg");
+                        value: root.received;
+                        caption: "Received";
+                    }
+                }
+            }
 
-                    // Left Master: Profile List
-                    OutlinedCard {
-                        width: 220px;
+            // ---- Profiles ----
+            if root.current-tab == 1: HorizontalLayout {
+                spacing: 14px;
+                vertical-stretch: 1;
 
-                        VerticalLayout {
-                            padding: 12px;
-                            spacing: 10px;
+                Panel {
+                    width: 210px;
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 4px;
 
-                            Text {
-                                text: "Saved Profiles";
-                                font-size: 14px;
-                                font-weight: 600;
-                                color: MaterialPalette.on_surface;
+                        Caption {
+                            text: "SAVED PROFILES";
+                            height: 22px;
+                            x: 6px;
+                        }
+
+                        if root.connection-items.length == 0: Text {
+                            text: "No profiles yet.";
+                            font-size: 12px;
+                            color: Theme.muted;
+                            x: 6px;
+                        }
+
+                        for item[index] in root.connection-items: Rectangle {
+                            height: 34px;
+                            border-radius: 8px;
+                            background: index == root.selected-index ? Theme.accent-soft : row.has-hover ? Theme.panel-alt : transparent;
+
+                            row := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.select-connection(index);
+                                }
                             }
 
-                            // Profiles List
-                            ScrollView {
-                                vertical-stretch: 1;
-
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 8px;
                                 VerticalLayout {
-                                    spacing: 4px;
-                                    alignment: start;
-
-                                    for item[index] in root.connection-items: Rectangle {
-                                        height: 44px;
-                                        border-radius: 8px;
-                                        background: index == root.selected-index ? MaterialPalette.secondary_container : touch.has-hover ? MaterialPalette.surface_container_highest : transparent;
-
-                                        touch := TouchArea {
-                                            clicked => { root.select-connection(index); }
-                                        }
-
-                                        HorizontalLayout {
-                                            padding-left: 10px;
-                                            padding-right: 10px;
-                                            spacing: 8px;
-                                            alignment: start;
-
-                                            Text {
-                                                text: item.text;
-                                                font-size: 13px;
-                                                color: index == root.selected-index ? MaterialPalette.on_secondary_container : MaterialPalette.on_surface;
-                                                overflow: elide;
-                                                vertical-alignment: center;
-                                                horizontal-stretch: 1;
-                                            }
-                                        }
+                                    alignment: center;
+                                    Image {
+                                        source: @image-url("icons/lan.svg");
+                                        width: 13px;
+                                        height: 13px;
+                                        colorize: index == root.selected-index ? Theme.accent : Theme.muted;
                                     }
                                 }
-                            }
-
-                            // Add / Remove Toolbar
-                            HorizontalLayout {
-                                spacing: 8px;
-                                alignment: space-between;
-
-                                OutlineButton {
-                                    text: "Add";
-                                    enabled: root.can-add;
-                                    clicked => { root.add-connection(); }
-                                }
-
-                                OutlineButton {
-                                    text: "Delete";
-                                    enabled: root.can-remove;
-                                    clicked => { root.request-delete-connection(); }
+                                Text {
+                                    text: item.text;
+                                    font-size: 12px;
+                                    font-weight: index == root.selected-index ? 600 : 400;
+                                    color: index == root.selected-index ? Theme.accent : Theme.text;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
                                 }
                             }
                         }
+
+                        Rectangle {
+                            vertical-stretch: 1;
+                        }
+
+                        if root.can-add: HorizontalLayout {
+                            spacing: 6px;
+                            Button {
+                                text: "Add";
+                                kind: 1;
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    root.add-connection();
+                                }
+                            }
+                            Button {
+                                text: "Delete";
+                                kind: 1;
+                                enabled: root.can-remove;
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    root.request-delete-connection();
+                                }
+                            }
+                        }
+                        if !root.can-add: Text {
+                            text: "Profiles are set up by your IT department. Contact IT if you need a different one.";
+                            font-size: 11px;
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                        }
                     }
+                }
 
-                    // Right Detail: Profile Editor
-                    OutlinedCard {
-                        horizontal-stretch: 1;
-
+                Panel {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
                         ScrollView {
+                            vertical-stretch: 1;
                             VerticalLayout {
-                                padding: 20px;
-                                spacing: 14px;
+                                padding: 18px;
+                                spacing: 12px;
                                 alignment: start;
 
-                                if root.form-error != "": InfoBanner {
+                                if root.form-error != "": Banner {
                                     text: root.form-error;
-                                    is-error: true;
                                 }
-
-                                if root.form-info != "": InfoBanner {
+                                if root.form-info != "": Banner {
                                     text: root.form-info;
-                                    is-error: false;
+                                    error: false;
                                 }
 
-                                if root.conn-managed: InfoBanner {
-                                    text: "Managed by IT department. Only username and password can be edited.";
-                                    is-error: false;
+                                Caption {
+                                    text: "CONNECTION";
                                 }
-
-                                if !root.conn-managed: TextField {
-                                    label: "Profile Name";
-                                    text <=> root.conn-name;
+                                if root.conn-managed: VerticalLayout {
+                                    spacing: 6px;
+                                    Text {
+                                        text: "Set up by your organisation. Only your username and password can be changed.";
+                                        font-size: 11px;
+                                        color: Theme.muted;
+                                        wrap: word-wrap;
+                                    }
+                                    InfoRow {
+                                        label: "Name";
+                                        value: root.conn-name;
+                                    }
+                                    InfoRow {
+                                        label: "Gateway";
+                                        value: root.gateway;
+                                    }
+                                    InfoRow {
+                                        label: "Certificate";
+                                        value: root.pin != "" ? "Pinned by your organisation" : "Public, or confirmed on first connect";
+                                    }
                                 }
-
-                                if !root.conn-managed: TextField {
-                                    label: "Gateway Address";
-                                    supporting_text: "Example: vpn.company.com:10443";
-                                    text <=> root.gateway;
-                                }
-
-                                TextField {
-                                    label: "Username";
-                                    text <=> root.username;
-                                }
-
-                                TextField {
-                                    label: "Password";
-                                    supporting_text: root.password-saved ? "Password is encrypted & saved. Leave empty to keep it." : "";
-                                    text <=> root.password;
-                                    input-type: root.password-visible ? InputType.text : InputType.password;
-                                    trailing_icon: root.password-visible ? @image-url("icons/visibility_off.svg") : @image-url("icons/visibility.svg");
-                                    trailing_icon_clicked => {
-                                        root.password-visible = !root.password-visible;
+                                if !root.conn-managed: HorizontalLayout {
+                                    spacing: 12px;
+                                    Field {
+                                        label: "Name";
+                                        text <=> root.conn-name;
+                                        placeholder: "Office VPN";
+                                        horizontal-stretch: 1;
+                                    }
+                                    Field {
+                                        label: "Gateway";
+                                        text <=> root.gateway;
+                                        placeholder: "vpn.example.com:10443";
+                                        horizontal-stretch: 2;
                                     }
                                 }
 
+                                Divider { }
+                                Caption {
+                                    text: "SIGN-IN";
+                                }
                                 HorizontalLayout {
                                     spacing: 12px;
-                                    alignment: space-between;
-
+                                    Field {
+                                        label: "Username";
+                                        text <=> root.username;
+                                        horizontal-stretch: 1;
+                                    }
+                                    Field {
+                                        label: "Password";
+                                        text <=> root.password;
+                                        password: true;
+                                        placeholder: root.password-saved ? "Saved (leave empty to keep)" : "";
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: 12px;
                                     Text {
                                         text: "Save password for this Windows account";
-                                        font-size: 13px;
-                                        color: MaterialPalette.on_surface;
+                                        font-size: 12px;
+                                        color: Theme.text;
                                         vertical-alignment: center;
+                                        horizontal-stretch: 1;
                                     }
-
-                                    Switch {
+                                    Toggle {
                                         checked <=> root.save-password;
                                     }
                                 }
-
-                                TextField {
+                                Field {
                                     label: "Realm (optional)";
-                                    supporting_text: "Only required if specified by IT";
                                     text <=> root.realm;
-                                    read_only: root.realm-locked;
+                                    read-only: root.realm-locked;
+                                    hint: "Only needed if your IT department gave you one.";
                                 }
 
-                                if !root.conn-managed: OutlinedCard {
-                                    VerticalLayout {
-                                        padding: 16px;
-                                        spacing: 10px;
-
-                                        Text {
-                                            text: "Gateway Certificate Pinning";
-                                            font-size: 14px;
-                                            font-weight: 600;
-                                            color: MaterialPalette.on_surface;
+                                if !root.conn-managed: Divider { }
+                                if !root.conn-managed: Caption {
+                                    text: "CERTIFICATE";
+                                }
+                                if !root.conn-managed: Field {
+                                    label: "SHA-256 fingerprint";
+                                    text <=> root.pin;
+                                    mono: true;
+                                    placeholder: "Leave empty to confirm on first connect";
+                                }
+                                if !root.conn-managed: HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    Button {
+                                        text: root.cert-checking ? "Checking…" : "Check certificate";
+                                        kind: 1;
+                                        enabled: !root.cert-checking && root.gateway != "";
+                                        clicked => {
+                                            root.check-certificate();
                                         }
-
-                                        Text {
-                                            text: "Pin the SHA-256 fingerprint for enterprise or self-signed gateways. Leave blank to confirm on first connect.";
-                                            wrap: word-wrap;
-                                            font-size: 12px;
-                                            color: MaterialPalette.on_surface_variant;
-                                        }
-
-                                        TextField {
-                                            label: "SHA-256 Fingerprint";
-                                            text <=> root.pin;
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: 10px;
-                                            alignment: start;
-
-                                            OutlineButton {
-                                                text: root.cert-checking ? "Checking…" : "Check certificate";
-                                                enabled: !root.cert-checking && root.gateway != "";
-                                                clicked => { root.check-certificate(); }
-                                            }
-
-                                            if root.cert-fingerprint != "" && !root.cert-public && root.cert-fingerprint != root.pin: FilledButton {
-                                                text: "Trust this certificate";
-                                                clicked => { root.trust-certificate(); }
-                                            }
-                                        }
-
-                                        if root.cert-result != "": Text {
-                                            text: root.cert-result;
-                                            wrap: word-wrap;
-                                            font-size: 12px;
-                                            color: MaterialPalette.on_surface;
+                                    }
+                                    if root.cert-fingerprint != "" && !root.cert-public && root.cert-fingerprint != root.pin: Button {
+                                        text: "Trust this certificate";
+                                        kind: 3;
+                                        clicked => {
+                                            root.trust-certificate();
                                         }
                                     }
                                 }
+                                if !root.conn-managed && root.cert-result != "": Text {
+                                    text: root.cert-result;
+                                    font-size: 11px;
+                                    color: Theme.muted;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
 
-                                // Actions
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    alignment: end;
+                        Divider { }
+                        HorizontalLayout {
+                            padding: 12px;
+                            padding-left: 18px;
+                            padding-right: 18px;
+                            spacing: 8px;
+                            alignment: end;
+                            Button {
+                                text: "Save";
+                                kind: 1;
+                                clicked => {
+                                    root.save-settings();
+                                }
+                            }
+                            Button {
+                                text: "Save and connect";
+                                clicked => {
+                                    root.save-and-connect();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
-                                    TonalButton {
-                                        text: "Save";
-                                        clicked => { root.save-settings(); }
-                                    }
+            // ---- Settings ----
+            if root.current-tab == 2: VerticalLayout {
+                spacing: 14px;
+                alignment: start;
+                vertical-stretch: 1;
 
-                                    FilledButton {
-                                        text: "Save and connect";
-                                        clicked => { root.save-and-connect(); }
-                                    }
+                Panel {
+                    VerticalLayout {
+                        padding-left: 18px;
+                        padding-right: 18px;
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+
+                        SettingRow {
+                            title: "Connect automatically";
+                            description: "Connect when stayline starts, if a password is saved.";
+                            Toggle {
+                                checked <=> root.auto-connect;
+                                toggled => {
+                                    root.preferences-changed();
+                                }
+                            }
+                        }
+                        Divider { }
+                        SettingRow {
+                            title: "Start with Windows";
+                            description: "Open stayline in the tray when you sign in.";
+                            Toggle {
+                                checked <=> root.start-at-login;
+                                toggled => {
+                                    root.preferences-changed();
+                                }
+                            }
+                        }
+                        Divider { }
+                        SettingRow {
+                            title: "Appearance";
+                            description: "Light, dark, or follow Windows.";
+                            Segmented {
+                                items: ["Light", "Dark", "System"];
+                                current <=> root.theme-mode;
+                                changed(index) => {
+                                    root.theme-changed(index);
                                 }
                             }
                         }
                     }
                 }
 
-                // 3. PREFERENCES VIEW
-                if root.current-tab == 2: ScrollView {
+                Panel {
                     VerticalLayout {
-                        padding: 24px;
-                        spacing: 20px;
-                        alignment: start;
-
-                        // Connection Preferences
-                        OutlinedCard {
-                            VerticalLayout {
-                                padding: 20px;
-                                spacing: 16px;
-
-                                Text {
-                                    text: "Connection & Launch";
-                                    font-size: 15px;
-                                    font-weight: 600;
-                                    color: MaterialPalette.on_surface;
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    alignment: space-between;
-
-                                    Text {
-                                        text: "Connect automatically when stayline starts";
-                                        font-size: 13px;
-                                        color: MaterialPalette.on_surface;
-                                        vertical-alignment: center;
-                                    }
-
-                                    Switch {
-                                        checked <=> root.auto-connect;
-                                        checked_state_changed => { root.preferences-changed(); }
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    alignment: space-between;
-
-                                    Text {
-                                        text: "Start stayline when I sign in to Windows";
-                                        font-size: 13px;
-                                        color: MaterialPalette.on_surface;
-                                        vertical-alignment: center;
-                                    }
-
-                                    Switch {
-                                        checked <=> root.start-at-login;
-                                        checked_state_changed => { root.preferences-changed(); }
-                                    }
-                                }
+                        padding-left: 18px;
+                        padding-right: 18px;
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+                        SettingRow {
+                            title: "Background service";
+                            description: root.service-running ? "Running. The VPN stays up even when this window is closed." : "Not running, so the VPN cannot connect. Reinstall stayline or contact IT.";
+                            Chip {
+                                text: root.service-running ? "Running" : "Not running";
+                                dot: root.service-running ? Theme.success : Theme.danger;
                             }
                         }
-
-                        // Appearance Preference
-                        OutlinedCard {
-                            VerticalLayout {
-                                padding: 20px;
-                                spacing: 16px;
-
-                                Text {
-                                    text: "Appearance";
-                                    font-size: 15px;
-                                    font-weight: 600;
-                                    color: MaterialPalette.on_surface;
-                                }
-
-                                Text {
-                                    text: "Choose your preferred theme, or follow Windows system appearance in real time.";
-                                    font-size: 13px;
-                                    color: MaterialPalette.on_surface_variant;
-                                }
-
-                                HorizontalLayout {
-                                    alignment: start;
-
-                                    SegmentedButton {
-                                        current_index: root.theme-mode;
-                                        index_changed(idx) => {
-                                            root.theme-changed(idx);
-                                        }
-
-                                        items: [
-                                            { text: "Light" },
-                                            { text: "Dark" },
-                                            { text: "System" },
-                                        ];
-                                    }
-                                }
-                            }
-                        }
-
-                        // Troubleshooting
-                        OutlinedCard {
-                            VerticalLayout {
-                                padding: 20px;
-                                spacing: 16px;
-
-                                Text {
-                                    text: "Troubleshooting";
-                                    font-size: 15px;
-                                    font-weight: 600;
-                                    color: MaterialPalette.on_surface;
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    alignment: space-between;
-
-                                    Text {
-                                        text: "Service Status";
-                                        font-size: 13px;
-                                        color: MaterialPalette.on_surface;
-                                        vertical-alignment: center;
-                                    }
-
-                                    Badge {
-                                        text: root.service-status;
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    alignment: start;
-
-                                    TonalButton {
-                                        text: "Open logs folder";
-                                        clicked => { root.open-logs(); }
-                                    }
+                        Divider { }
+                        SettingRow {
+                            title: "Logs";
+                            description: "Useful when IT asks for details about a problem.";
+                            Button {
+                                text: "Open logs folder";
+                                kind: 1;
+                                clicked => {
+                                    root.open-logs();
                                 }
                             }
                         }
                     }
                 }
+            }
 
-                // 4. ABOUT VIEW
-                if root.current-tab == 3: ScrollView {
-                    VerticalLayout {
-                        padding: 24px;
-                        spacing: 20px;
-                        alignment: start;
+            // ---- About ----
+            if root.current-tab == 3: VerticalLayout {
+                spacing: 14px;
+                vertical-stretch: 1;
 
-                        // About Banner Card
-                        ElevatedCard {
-                            VerticalLayout {
-                                padding: 22px;
-                                spacing: 14px;
-
-                                HorizontalLayout {
-                                    spacing: 20px;
-                                    alignment: start;
-
-                                    // Brand Emblem in Apple-style Glassmorphic Container
-                                    Rectangle {
-                                        width: 104px;
-                                        height: 104px;
-                                        border-radius: 20px;
-                                        background: MaterialPalette.surface_container_high;
-                                        border-width: 1px;
-                                        border-color: MaterialPalette.outline_variant;
-
-                                        Image {
-                                            width: 84px;
-                                            height: 84px;
-                                            source: @image-url("icons/stayline-emblem.png");
-                                            image-fit: contain;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                        }
-                                    }
-
-                                    VerticalLayout {
-                                        spacing: 6px;
-                                        horizontal-stretch: 1;
-
-                                        Text {
-                                            text: "stayline";
-                                            font-size: 24px;
-                                            font-weight: 700;
-                                            color: MaterialPalette.on_surface;
-                                        }
-
-                                        Text {
-                                            text: "Version " + root.version;
-                                            font-size: 13px;
-                                            color: MaterialPalette.on_surface_variant;
-                                        }
-
-                                        Text {
-                                            text: "A lightweight Windows VPN client in Rust that keeps your FortiGate SSL-VPN tunnel up and reconnects automatically.";
-                                            font-size: 13px;
-                                            color: MaterialPalette.on_surface;
-                                            wrap: word-wrap;
-                                        }
-
-                                        Text {
-                                            text: "stayline is not affiliated with or endorsed by Fortinet, Inc. FortiGate and FortiClient are trademarks of Fortinet, Inc.";
-                                            font-size: 11px;
-                                            color: MaterialPalette.on_surface_variant;
-                                            wrap: word-wrap;
-                                        }
-                                    }
-                                }
+                Panel {
+                    HorizontalLayout {
+                        padding: 16px;
+                        spacing: 14px;
+                        Rectangle {
+                            width: 52px;
+                            height: 52px;
+                            border-radius: 12px;
+                            background: Theme.panel-alt;
+                            Image {
+                                source: @image-url("icons/stayline-emblem.png");
+                                width: 36px;
+                                height: 36px;
+                                image-fit: contain;
                             }
                         }
-
-                        // Open Source Components Section
-                        OutlinedCard {
-                            VerticalLayout {
-                                padding: 20px;
-                                spacing: 14px;
-
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    alignment: space-between;
-
-                                    Text {
-                                        text: "Open-source components (" + root.components.length + ")";
-                                        font-size: 15px;
-                                        font-weight: 600;
-                                        color: MaterialPalette.on_surface;
-                                        vertical-alignment: center;
-                                    }
-
-                                    OutlineButton {
-                                        text: "Full license texts";
-                                        clicked => { root.open-notices(); }
-                                    }
-                                }
-
-                                TextField {
-                                    label: "Search components…";
-                                    text <=> root.search-query;
-                                    edited(query) => {
-                                        root.filter-components(query);
-                                    }
-                                }
-
-                                // Table Header
-                                Rectangle {
-                                    height: 32px;
-                                    background: MaterialPalette.surface_container_highest;
-                                    border-radius: 6px;
-
-                                    HorizontalLayout {
-                                        padding-left: 12px;
-                                        padding-right: 12px;
-                                        spacing: 12px;
-
-                                        Text {
-                                            text: "Component";
-                                            width: 220px;
-                                            font-size: 12px;
-                                            font-weight: 600;
-                                            color: MaterialPalette.on_surface;
-                                            vertical-alignment: center;
-                                        }
-                                        Text {
-                                            text: "Version";
-                                            width: 80px;
-                                            font-size: 12px;
-                                            font-weight: 600;
-                                            color: MaterialPalette.on_surface;
-                                            vertical-alignment: center;
-                                        }
-                                        Text {
-                                            text: "License";
-                                            horizontal-stretch: 1;
-                                            font-size: 12px;
-                                            font-weight: 600;
-                                            color: MaterialPalette.on_surface;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-                                }
-
-                                // Table rows
-                                ListView {
-                                    height: 280px;
-
-                                    for component in root.components: Rectangle {
-                                        height: 30px;
-
-                                        HorizontalLayout {
-                                            padding-left: 12px;
-                                            padding-right: 12px;
-                                            spacing: 12px;
-
-                                            Text {
-                                                text: component.name;
-                                                width: 220px;
-                                                font-size: 12px;
-                                                color: MaterialPalette.on_surface;
-                                                overflow: elide;
-                                                vertical-alignment: center;
-                                            }
-                                            Text {
-                                                text: component.version;
-                                                width: 80px;
-                                                font-size: 12px;
-                                                color: MaterialPalette.on_surface_variant;
-                                                vertical-alignment: center;
-                                            }
-                                            Text {
-                                                text: component.license;
-                                                horizontal-stretch: 1;
-                                                font-size: 12px;
-                                                color: MaterialPalette.on_surface_variant;
-                                                overflow: elide;
-                                                vertical-alignment: center;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // GUI Framework Attribution
-                        OutlinedCard {
+                        VerticalLayout {
+                            spacing: 2px;
+                            alignment: center;
+                            horizontal-stretch: 1;
                             HorizontalLayout {
-                                padding-left: 18px;
-                                padding-right: 18px;
-                                padding-top: 12px;
-                                padding-bottom: 12px;
-                                spacing: 16px;
-                                alignment: space-between;
+                                spacing: 8px;
+                                alignment: start;
+                                Text {
+                                    text: "stayline";
+                                    font-size: 15px;
+                                    font-weight: 600;
+                                    color: Theme.text;
+                                }
+                                Text {
+                                    text: "v" + root.version;
+                                    font-size: 11px;
+                                    color: Theme.muted;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            Text {
+                                text: "Keeps your FortiGate SSL-VPN connection up and reconnects it automatically.";
+                                font-size: 12px;
+                                color: Theme.text;
+                                wrap: word-wrap;
+                            }
+                            Text {
+                                text: "Not affiliated with or endorsed by Fortinet, Inc. FortiGate and FortiClient are trademarks of Fortinet, Inc. Protocol behaviour learned from openfortivpn; no openfortivpn code is included.";
+                                font-size: 10px;
+                                color: Theme.muted;
+                                wrap: word-wrap;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            AboutSlint {
+                                width: 120px;
+                                height: 56px;
+                            }
+                        }
+                    }
+                }
 
-                                VerticalLayout {
-                                    alignment: center;
-                                    spacing: 2px;
+                Panel {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
 
-                                    Text {
-                                        text: "Built with Slint GUI";
-                                        font-size: 13px;
-                                        font-weight: 600;
-                                        color: MaterialPalette.on_surface;
-                                    }
-                                    Text {
-                                        text: "Native, high-performance, and lightweight GUI toolkit for Rust.";
-                                        font-size: 11px;
-                                        color: MaterialPalette.on_surface_variant;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: "Open-source components (" + root.components.length + ")";
+                                    font-size: 12px;
+                                    font-weight: 600;
+                                    color: Theme.text;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: "stayline is built on the software below. Thank you to all its authors.";
+                                    font-size: 11px;
+                                    color: Theme.muted;
+                                    overflow: elide;
+                                }
+                            }
+                            Field {
+                                width: 170px;
+                                text <=> root.search-query;
+                                placeholder: "Search";
+                                edited(query) => {
+                                    root.filter-components(query);
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Button {
+                                    text: "Licence texts";
+                                    kind: 1;
+                                    clicked => {
+                                        root.open-notices();
                                     }
                                 }
+                            }
+                        }
 
-                                AboutSlint {
-                                    width: 140px;
-                                    height: 44px;
+                        Rectangle {
+                            height: 26px;
+                            border-radius: 6px;
+                            background: Theme.panel-alt;
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 10px;
+                                Caption {
+                                    text: "COMPONENT";
+                                    width: 200px;
+                                    vertical-alignment: center;
+                                }
+                                Caption {
+                                    text: "VERSION";
+                                    width: 70px;
+                                    vertical-alignment: center;
+                                }
+                                Caption {
+                                    text: "LICENCE";
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                        }
+
+                        ListView {
+                            vertical-stretch: 1;
+                            min-height: 80px;
+                            for component in root.components: HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 10px;
+                                height: 24px;
+                                Text {
+                                    text: component.name;
+                                    width: 200px;
+                                    font-size: 11px;
+                                    color: Theme.text;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: component.version;
+                                    width: 70px;
+                                    font-size: 11px;
+                                    color: Theme.muted;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: component.license;
+                                    font-size: 11px;
+                                    color: Theme.muted;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
                                 }
                             }
                         }
@@ -1104,60 +1481,46 @@ export component AppWindow inherits Window {
         }
     }
 
-    // Modal Delete Confirmation Overlay
+    // Delete confirmation
     if root.confirm-delete-open: Rectangle {
-        width: 100%;
-        height: 100%;
-        background: #00000088;
+        background: #0000007a;
+        TouchArea { }
 
-        TouchArea {} // Block events underneath
-
-        Rectangle {
-            width: 360px;
-            height: 180px;
+        Panel {
+            width: 340px;
+            height: dialog.preferred-height;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: MaterialPalette.surface_container_high;
-            border-radius: 16px;
-            border-width: 1px;
-            border-color: MaterialPalette.outline;
 
-            VerticalLayout {
-                padding: 20px;
-                spacing: 14px;
-                alignment: space-between;
-
-                VerticalLayout {
-                    spacing: 8px;
-
-                    Text {
-                        text: "Remove Connection?";
-                        font-size: 18px;
-                        font-weight: 700;
-                        color: MaterialPalette.on_surface;
-                    }
-
-                    Text {
-                        text: "Are you sure you want to remove \"" + root.conn-name + "\"? This action cannot be undone.";
-                        wrap: word-wrap;
-                        font-size: 13px;
-                        color: MaterialPalette.on_surface_variant;
-                    }
+            dialog := VerticalLayout {
+                padding: 18px;
+                spacing: 8px;
+                Text {
+                    text: "Remove profile?";
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Theme.text;
                 }
-
+                Text {
+                    text: "\"" + root.conn-name + "\" and its saved password will be removed.";
+                    font-size: 12px;
+                    color: Theme.muted;
+                    wrap: word-wrap;
+                }
                 HorizontalLayout {
-                    spacing: 12px;
+                    padding-top: 8px;
+                    spacing: 8px;
                     alignment: end;
-
-                    OutlineButton {
+                    Button {
                         text: "Cancel";
+                        kind: 1;
                         clicked => {
                             root.cancel-delete-connection();
                         }
                     }
-
-                    FilledButton {
+                    Button {
                         text: "Remove";
+                        kind: 2;
                         clicked => {
                             root.remove-connection();
                         }

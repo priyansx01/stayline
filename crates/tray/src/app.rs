@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use slint::{
     ComponentHandle, ModelRc, SharedString, StandardListViewItem, Timer, TimerMode, VecModel,
 };
-use stayline_config::{secret, Config, Connection, ConnectionEdit, ThemePreference};
+use stayline_config::{Config, Connection, ConnectionEdit, ThemePreference, secret};
 use stayline_ipc::{Attention, CertificateReport, Event, Request, TunnelState};
 use tauri_winrt_notification::Toast;
 use tokio::sync::mpsc;

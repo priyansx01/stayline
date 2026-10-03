@@ -1,10 +1,10 @@
 //! Windows theme detection and resolution.
 
 use stayline_config::ThemePreference;
-use windows::core::w;
 use windows::Win32::System::Registry::{
-    HKEY_CURRENT_USER, RegCloseKey, RegOpenKeyExW, RegQueryValueExW, KEY_READ, REG_DWORD,
+    HKEY_CURRENT_USER, KEY_READ, REG_DWORD, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
 };
+use windows::core::w;
 
 /// Reads `AppsUseLightTheme` from the Windows registry.
 /// Returns `true` if Windows is in dark mode, `false` if in light mode.
