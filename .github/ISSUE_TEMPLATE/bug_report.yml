@@ -1,0 +1,54 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Remove gateway addresses, usernames, certificate fingerprints and other identifying details** from everything you paste.
+        Security problems: please use the Security tab → "Report a vulnerability" instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Connect to the VPN
+        2. Turn Wi-Fi off for a minute
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: Stayline VPN version
+      description: Shown in the sidebar and on the About page.
+      placeholder: 0.1.1
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: dropdown
+    id: tunnel
+    attributes:
+      label: Tunnel mode
+      options:
+        - Split tunnel
+        - Full tunnel
+        - Not sure
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Service: `%ProgramData%\stayline\logs`, app: `%LOCALAPPDATA%\stayline\data\logs` (Settings → Open logs folder). Redact identifying details.
+      render: text

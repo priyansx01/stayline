@@ -58,7 +58,7 @@ if (-not $Output) {
 New-Item -ItemType Directory -Force (Split-Path $Output) | Out-Null
 
 Run 'wix build' {
-    dotnet wix build installer\stayline.wxs -arch x64 `
+    dotnet wix build packaging\windows\stayline.wxs -arch x64 `
         -ext WixToolset.Util.wixext -ext WixToolset.UI.wixext `
         -d "Version=$version" -d "Root=$root" -d "Bin=$root\target\release" `
         -d "ConnectionName=$Name" -d "Gateway=$Gateway" -d "Pin=$Pin" -d "Realm=$Realm" `

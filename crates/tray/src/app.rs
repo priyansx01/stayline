@@ -420,7 +420,9 @@ impl App {
         };
         if let Some(w) = &self.window {
             w.set_cert_result(text.into());
-            w.set_cert_fingerprint(grouped(report.fingerprint.as_deref().unwrap_or_default()).into());
+            w.set_cert_fingerprint(
+                grouped(report.fingerprint.as_deref().unwrap_or_default()).into(),
+            );
             w.set_cert_public(report.publicly_trusted);
         }
         self.cert = Some(report);

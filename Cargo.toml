@@ -14,8 +14,13 @@ members = [
 version = "0.1.1"
 edition = "2024"
 rust-version = "1.99"
+authors = ["Priyansh"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/priyansx01/stayline"
+repository = "https://github.com/priyansx01/stayline-vpn"
+homepage = "https://github.com/priyansx01/stayline-vpn"
+readme = "README.md"
+keywords = ["vpn", "fortigate", "ssl-vpn", "windows", "wintun"]
+categories = ["network-programming"]
 publish = false
 
 [workspace.dependencies]

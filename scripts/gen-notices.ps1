@@ -23,7 +23,7 @@ function Escape([string]$text) {
 }
 
 $html = Join-Path $root 'THIRD-PARTY-NOTICES.html'
-cargo about generate --workspace notices\notices.hbs -o $html
+cargo about generate --workspace packaging\notices\notices.hbs -o $html
 if ($LASTEXITCODE -ne 0) { throw 'cargo about failed' }
 $content = [IO.File]::ReadAllText($html)
 $content = $content.Replace('<!-- SLINT_LICENSE -->', (Escape ([IO.File]::ReadAllText($slintLicense.FullName))))
@@ -31,7 +31,7 @@ $content = $content.Replace('<!-- WINTUN_LICENSE -->', (Escape ([IO.File]::ReadA
 [IO.File]::WriteAllText($html, $content, (New-Object Text.UTF8Encoding $false))
 
 $list = Join-Path $root 'crates\tray\third-party.txt'
-cargo about generate --workspace notices\list.hbs -o $list
+cargo about generate --workspace packaging\notices\list.hbs -o $list
 if ($LASTEXITCODE -ne 0) { throw 'cargo about failed' }
 # Show the licence stayline actually uses for Slint, not the whole choice.
 $lines = @("wintun.dll`t0.14.1`tWintun Prebuilt Binaries License") +
