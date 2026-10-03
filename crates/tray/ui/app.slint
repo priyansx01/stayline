@@ -165,6 +165,8 @@ component Field inherits VerticalLayout {
 
     Rectangle {
         height: 32px;
+        // The placeholder's width follows the box, not the other way round.
+        min-width: 0px;
         border-radius: 8px;
         background: root.read-only ? Theme.panel-alt : Theme.panel;
         border-width: 1px;
@@ -212,7 +214,10 @@ component Field inherits VerticalLayout {
 
         if root.text == "" && root.placeholder != "": Text {
             x: 11px;
+            // Stops before the eye icon instead of running under it.
+            width: parent.width - self.x - (root.password ? 32px : 10px);
             height: parent.height;
+            overflow: elide;
             text: root.placeholder;
             font-size: 12px;
             color: Theme.muted.with-alpha(0.75);
@@ -1133,7 +1138,7 @@ export component AppWindow inherits Window {
                                         label: "Password";
                                         text <=> root.password;
                                         password: true;
-                                        placeholder: root.password-saved ? "Saved (leave empty to keep)" : "";
+                                        placeholder: root.password-saved ? "Saved" : "";
                                         horizontal-stretch: 1;
                                     }
                                 }
@@ -1355,10 +1360,7 @@ export component AppWindow inherits Window {
                         }
                         VerticalLayout {
                             alignment: center;
-                            AboutSlint {
-                                width: 120px;
-                                height: 56px;
-                            }
+                            AboutSlint { }
                         }
                     }
                 }
