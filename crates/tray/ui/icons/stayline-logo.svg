@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="shield"><path d="M512 84 C626 150 750 184 868 196 C884 540 770 800 512 948 C254 800 140 540 156 196 C274 184 398 150 512 84 Z"/></clipPath>
+    <clipPath id="keyhole">
+      <circle cx="512" cy="582" r="44"/>
+      <rect x="490" y="600" width="44" height="80" rx="12"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#shield)">
+    <rect width="512" height="1024" fill="#1e63b4"/>
+    <rect x="512" width="512" height="1024" fill="#1f9aa0"/>
+  </g>
+  <path d="M400 488 V380 A112 112 0 0 1 624 380 V488" fill="none" stroke="#fff" stroke-width="58"/>
+  <rect x="348" y="468" width="328" height="276" rx="52" fill="#fff"/>
+  <g clip-path="url(#keyhole)">
+    <rect width="512" height="1024" fill="#1e63b4"/>
+    <rect x="512" width="512" height="1024" fill="#1f9aa0"/>
+  </g>
+</svg>

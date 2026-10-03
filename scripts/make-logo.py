@@ -5,7 +5,8 @@ writes every logo asset, so the mark stays crisp at any size:
 - assets/stayline-logo.svg               vector master
 - assets/stayline-logo-512.png           large PNG (README, website)
 - assets/stayline.ico                    app/installer icon, 16 to 256 px
-- crates/tray/ui/icons/stayline-emblem.png  in-app emblem (256 px)
+- crates/tray/ui/icons/stayline-logo.svg    in-app logo (drawn at the size shown)
+- crates/tray/ui/icons/stayline-icon-32.png  window/taskbar icon
 
     python scripts/make-logo.py
 """
@@ -142,13 +143,23 @@ def main():
     def at(px):
         return master.resize((px, px), Image.Resampling.LANCZOS)
 
-    with open(os.path.join(ROOT, "assets", "stayline-logo.svg"), "w", newline="\n") as f:
-        f.write(svg())
+    icons = os.path.join(ROOT, "crates", "tray", "ui", "icons")
+    for path in (os.path.join(ROOT, "assets", "stayline-logo.svg"), os.path.join(icons, "stayline-logo.svg")):
+        with open(path, "w", newline="\n") as f:
+            f.write(svg())
     at(512).save(os.path.join(ROOT, "assets", "stayline-logo-512.png"), optimize=True)
-    at(256).save(os.path.join(ROOT, "crates", "tray", "ui", "icons", "stayline-emblem.png"), optimize=True)
+    # The app scales bitmaps without smoothing, so the window icon is
+    # pre-rendered at the size Windows shows it; in-app logos use the SVG.
+    at(32).save(os.path.join(icons, "stayline-icon-32.png"), optimize=True)
+    # Every icon size rendered smoothly on its own, not left to the ICO writer.
     sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256]
-    at(256).save(os.path.join(ROOT, "assets", "stayline.ico"), sizes=[(s, s) for s in sizes])
-    print("wrote assets/stayline-logo.svg, stayline-logo-512.png, stayline.ico and the in-app emblem")
+    images = [at(s) for s in sizes]
+    images[-1].save(
+        os.path.join(ROOT, "assets", "stayline.ico"),
+        sizes=[(s, s) for s in sizes],
+        append_images=images[:-1],
+    )
+    print("wrote the SVG master, 512 px PNG, application icon and in-app logo files")
 
 
 if __name__ == "__main__":
