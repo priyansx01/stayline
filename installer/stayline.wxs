@@ -19,7 +19,7 @@
            Scope="perMachine"
            Compressed="yes">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Stayline VPN is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of Stayline VPN is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="stayline.ico" SourceFile="$(var.Root)\assets\stayline.ico" />
