@@ -1,4 +1,8 @@
-# stayline
+<p align="center">
+  <img src="assets/stayline-logo.svg" width="96" alt="stayline logo">
+</p>
+
+<h1 align="center">stayline</h1>
 
 A lightweight Windows VPN client, written in Rust, for FortiGate SSL-VPN gateways. It has one job: keep the tunnel up, and reconnect on its own after minutes or hours offline without asking for the password again.
 

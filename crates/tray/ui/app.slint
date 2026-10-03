@@ -1,6 +1,6 @@
 // stayline window: dark sidebar navigation, light content with rounded panels.
 
-import { AboutSlint, ListView, ScrollView } from "std-widgets.slint";
+import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 export struct Component {
     name: string,
@@ -639,6 +639,15 @@ export component AppWindow inherits Window {
     callback filter-components(string);
 
     property <bool> service-running: root.service-status == "Running";
+
+    // Keep the standard widgets (scroll bars, Slint badge) in the app's theme
+    // rather than Windows' own light/dark setting.
+    init => {
+        Palette.color-scheme = root.is-dark ? ColorScheme.dark : ColorScheme.light;
+    }
+    changed is-dark => {
+        Palette.color-scheme = root.is-dark ? ColorScheme.dark : ColorScheme.light;
+    }
 
     HorizontalLayout {
         // ---- Sidebar ----
