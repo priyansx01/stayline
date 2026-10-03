@@ -1,4 +1,4 @@
-// Stayline VPN window: dark sidebar navigation, light content with rounded panels.
+// Stayline VPN window: white sidebar navigation, light content with rounded panels.
 
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
@@ -11,8 +11,8 @@ export struct Component {
 export global Theme {
     in-out property <bool> dark: false;
 
-    out property <color> sidebar: dark ? #13162a : #1f2340;
-    out property <color> sidebar-text: #a3a8c3;
+    out property <color> sidebar: dark ? #191d31 : #ffffff;
+    out property <color> sidebar-text: dark ? #a3a8c3 : #5b6075;
     out property <color> page: dark ? #0f1220 : #f3f4f9;
     out property <color> panel: dark ? #191d31 : #ffffff;
     out property <color> panel-alt: dark ? #20253c : #f5f6fb;
@@ -63,7 +63,7 @@ component NavRow inherits Rectangle {
 
     height: 36px;
     border-radius: 10px;
-    background: active ? #ffffff14 : touch.has-hover ? #ffffff0a : transparent;
+    background: active ? Theme.accent-soft : touch.has-hover ? Theme.panel-alt : transparent;
 
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -100,7 +100,7 @@ component NavRow inherits Rectangle {
             text: root.text;
             font-size: 12px;
             font-weight: root.active ? 600 : 400;
-            color: root.active ? #ffffff : Theme.sidebar-text;
+            color: root.active ? Theme.accent : Theme.sidebar-text;
             vertical-alignment: center;
         }
     }
@@ -153,6 +153,8 @@ component Field inherits VerticalLayout {
     in property <bool> password;
     in property <bool> read-only;
     in property <bool> mono;
+    // Wraps long values (fingerprints) onto more lines instead of scrolling.
+    in property <bool> multiline;
     callback edited(string);
     callback accepted(string);
 
@@ -164,9 +166,10 @@ component Field inherits VerticalLayout {
     }
 
     Rectangle {
-        height: 32px;
+        height: root.multiline ? max(32px, input.preferred-height + 14px) : 32px;
         // The placeholder's width follows the box, not the other way round.
         min-width: 0px;
+        clip: true;
         border-radius: 8px;
         background: root.read-only ? Theme.panel-alt : Theme.panel;
         border-width: 1px;
@@ -180,7 +183,8 @@ component Field inherits VerticalLayout {
             input := TextInput {
                 text <=> root.text;
                 read-only: root.read-only;
-                single-line: true;
+                single-line: !root.multiline;
+                wrap: root.multiline ? TextWrap.word-wrap : TextWrap.no-wrap;
                 font-size: root.mono ? 11px : 12px;
                 font-family: root.mono ? "Consolas" : "Segoe UI";
                 color: Theme.text;
@@ -676,6 +680,12 @@ export component AppWindow inherits Window {
             width: 196px;
             background: Theme.sidebar;
 
+            Rectangle {
+                x: parent.width - 1px;
+                width: 1px;
+                background: Theme.border;
+            }
+
             VerticalLayout {
                 padding: 16px;
                 padding-top: 22px;
@@ -699,7 +709,7 @@ export component AppWindow inherits Window {
                         text: "Stayline VPN";
                         font-size: 16px;
                         font-weight: 700;
-                        color: #ffffff;
+                        color: Theme.text;
                         vertical-alignment: center;
                     }
                 }
@@ -1170,6 +1180,7 @@ export component AppWindow inherits Window {
                                     label: "SHA-256 fingerprint";
                                     text <=> root.pin;
                                     mono: true;
+                                    multiline: true;
                                     placeholder: "Leave empty to confirm on first connect";
                                 }
                                 if !root.conn-managed: HorizontalLayout {

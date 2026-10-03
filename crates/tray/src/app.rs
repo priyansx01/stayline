@@ -402,13 +402,14 @@ impl App {
                     .as_ref()
                     .and_then(|w| stayline_config::normalize_pin(&w.get_pin()).ok().flatten());
                 let reason = plain_certificate_problem(report.problem.as_deref().unwrap_or(""));
+                let shown = grouped(fp);
                 if pinned.as_deref() == Some(fp.as_str()) {
                     format!(
-                        "Not publicly trusted ({reason}), but it matches the pinned fingerprint.\nSHA-256: {fp}"
+                        "Not publicly trusted ({reason}), but it matches the pinned fingerprint.\nSHA-256: {shown}"
                     )
                 } else {
                     format!(
-                        "Not publicly trusted ({reason}).\nSHA-256: {fp}\nConfirm this fingerprint with IT before trusting it."
+                        "Not publicly trusted ({reason}).\nSHA-256: {shown}\nConfirm this fingerprint with IT before trusting it."
                     )
                 }
             }
@@ -419,7 +420,7 @@ impl App {
         };
         if let Some(w) = &self.window {
             w.set_cert_result(text.into());
-            w.set_cert_fingerprint(report.fingerprint.clone().unwrap_or_default().into());
+            w.set_cert_fingerprint(grouped(report.fingerprint.as_deref().unwrap_or_default()).into());
             w.set_cert_public(report.publicly_trusted);
         }
         self.cert = Some(report);
@@ -605,7 +606,7 @@ impl App {
         w.set_gateway_port(port.into());
         w.set_username(c.username.clone().into());
         w.set_realm(c.realm.clone().unwrap_or_default().into());
-        w.set_pin(c.pin.clone().unwrap_or_default().into());
+        w.set_pin(grouped(c.pin.as_deref().unwrap_or_default()).into());
         w.set_password("".into());
         let saved = self.editing.as_deref().is_some_and(secret::is_saved);
         w.set_password_saved(saved);
@@ -764,7 +765,7 @@ impl App {
             return;
         };
         if let Some(w) = &self.window {
-            w.set_pin(fp.into());
+            w.set_pin(grouped(&fp).into());
         }
         self.set_form_message("Certificate pinned. Choose Save to keep it.", false);
     }
@@ -1016,7 +1017,7 @@ impl App {
             Some(prompt) => {
                 w.set_trust_mode(if prompt.changed { 2 } else { 1 });
                 w.set_trust_gateway(prompt.gateway.clone().into());
-                w.set_trust_fingerprint(prompt.fingerprint.clone().into());
+                w.set_trust_fingerprint(grouped(&prompt.fingerprint).into());
             }
             None => w.set_trust_mode(0),
         }
@@ -1140,6 +1141,17 @@ fn plain_certificate_problem(problem: &str) -> &'static str {
     } else {
         "not trusted by Windows' public certificate authorities"
     }
+}
+
+/// Splits a fingerprint into blocks of eight so it wraps and is easy to
+/// compare by eye. Pins are normalised, so the spaces don't matter.
+fn grouped(fingerprint: &str) -> String {
+    fingerprint
+        .as_bytes()
+        .chunks(8)
+        .map(|c| String::from_utf8_lossy(c))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn capitalise(text: &str) -> String {
