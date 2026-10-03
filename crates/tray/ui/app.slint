@@ -1,4 +1,4 @@
-// stayline window: dark sidebar navigation, light content with rounded panels.
+// Stayline VPN window: dark sidebar navigation, light content with rounded panels.
 
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
@@ -541,7 +541,7 @@ component InfoRow inherits HorizontalLayout {
 }
 
 export component AppWindow inherits Window {
-    title: "stayline";
+    title: "Stayline VPN";
     icon: @image-url("icons/stayline-icon-32.png");
     background: Theme.page;
     default-font-family: "Segoe UI";
@@ -587,6 +587,8 @@ export component AppWindow inherits Window {
     // Profile form
     in-out property <string> conn-name;
     in-out property <string> gateway;
+    in-out property <string> gateway-host;
+    in-out property <string> gateway-port;
     in-out property <string> username;
     in-out property <string> password;
     in-out property <string> realm;
@@ -675,7 +677,7 @@ export component AppWindow inherits Window {
                         }
                     }
                     Text {
-                        text: "stayline";
+                        text: "Stayline VPN";
                         font-size: 16px;
                         font-weight: 700;
                         color: #ffffff;
@@ -850,7 +852,7 @@ export component AppWindow inherits Window {
                                     color: Theme.text;
                                 }
                                 Text {
-                                    text: "The gateway's certificate is not issued by a public authority. Check that this fingerprint matches the one from your IT department; stayline will remember it and warn you if it changes.";
+                                    text: "The gateway's certificate is not issued by a public authority. Check that this fingerprint matches the one from your IT department; Stayline VPN will remember it and warn you if it changes.";
                                     font-size: 11px;
                                     color: Theme.muted;
                                     wrap: word-wrap;
@@ -895,7 +897,7 @@ export component AppWindow inherits Window {
                                     color: Theme.danger;
                                 }
                                 Text {
-                                    text: "This can mean someone is intercepting your connection. stayline will not connect. Contact your IT department.";
+                                    text: "This can mean someone is intercepting your connection. Stayline VPN will not connect. Contact your IT department.";
                                     font-size: 11px;
                                     color: Theme.text;
                                     wrap: word-wrap;
@@ -911,7 +913,7 @@ export component AppWindow inherits Window {
                         }
 
                         if root.needs-attention && root.trust-mode == 0: Banner {
-                            text: "stayline stopped retrying because something needs your attention. Check the profile, then connect again.";
+                            text: "Stayline VPN stopped retrying because something needs your attention. Check the profile, then connect again.";
                         }
 
                         Divider { }
@@ -1111,27 +1113,36 @@ export component AppWindow inherits Window {
                                         value: root.conn-name;
                                     }
                                     InfoRow {
-                                        label: "Gateway";
-                                        value: root.gateway;
+                                        label: "Address";
+                                        value: root.gateway-host;
+                                    }
+                                    InfoRow {
+                                        label: "Port";
+                                        value: root.gateway-port != "" ? root.gateway-port : "443";
                                     }
                                     InfoRow {
                                         label: "Certificate";
                                         value: root.pin != "" ? "Pinned by your organisation" : "Public, or confirmed on first connect";
                                     }
                                 }
+                                if !root.conn-managed: Field {
+                                    label: "Name";
+                                    text <=> root.conn-name;
+                                    placeholder: "Office VPN";
+                                }
                                 if !root.conn-managed: HorizontalLayout {
                                     spacing: 12px;
                                     Field {
-                                        label: "Name";
-                                        text <=> root.conn-name;
-                                        placeholder: "Office VPN";
+                                        label: "Gateway address";
+                                        text <=> root.gateway-host;
+                                        placeholder: "vpn.example.com or 203.0.113.10";
                                         horizontal-stretch: 1;
                                     }
                                     Field {
-                                        label: "Gateway";
-                                        text <=> root.gateway;
-                                        placeholder: "vpn.example.com:10443";
-                                        horizontal-stretch: 2;
+                                        label: "Port";
+                                        text <=> root.gateway-port;
+                                        placeholder: "443";
+                                        width: 96px;
                                     }
                                 }
 
@@ -1190,7 +1201,7 @@ export component AppWindow inherits Window {
                                     Button {
                                         text: root.cert-checking ? "Checking…" : "Check certificate";
                                         kind: 1;
-                                        enabled: !root.cert-checking && root.gateway != "";
+                                        enabled: !root.cert-checking && root.gateway-host != "";
                                         clicked => {
                                             root.check-certificate();
                                         }
@@ -1252,7 +1263,7 @@ export component AppWindow inherits Window {
 
                         SettingRow {
                             title: "Connect automatically";
-                            description: "Connect when stayline starts, if a password is saved.";
+                            description: "Connect when Stayline VPN starts, if a password is saved.";
                             Toggle {
                                 checked <=> root.auto-connect;
                                 toggled => {
@@ -1263,7 +1274,7 @@ export component AppWindow inherits Window {
                         Divider { }
                         SettingRow {
                             title: "Start with Windows";
-                            description: "Open stayline in the tray when you sign in.";
+                            description: "Open Stayline VPN in the tray when you sign in.";
                             Toggle {
                                 checked <=> root.start-at-login;
                                 toggled => {
@@ -1294,7 +1305,7 @@ export component AppWindow inherits Window {
                         padding-bottom: 4px;
                         SettingRow {
                             title: "Background service";
-                            description: root.service-running ? "Running. The VPN stays up even when this window is closed." : "Not running, so the VPN cannot connect. Reinstall stayline or contact IT.";
+                            description: root.service-running ? "Running. The VPN stays up even when this window is closed." : "Not running, so the VPN cannot connect. Reinstall Stayline VPN or contact IT.";
                             Chip {
                                 text: root.service-running ? "Running" : "Not running";
                                 dot: root.service-running ? Theme.success : Theme.danger;
@@ -1345,7 +1356,7 @@ export component AppWindow inherits Window {
                                 spacing: 8px;
                                 alignment: start;
                                 Text {
-                                    text: "stayline";
+                                    text: "Stayline VPN";
                                     font-size: 15px;
                                     font-weight: 600;
                                     color: Theme.text;
@@ -1399,7 +1410,7 @@ export component AppWindow inherits Window {
                                     overflow: elide;
                                 }
                                 Text {
-                                    text: "stayline is built on the software below. Thank you to all its authors.";
+                                    text: "Stayline VPN is built on the software below. Thank you to all its authors.";
                                     font-size: 11px;
                                     color: Theme.muted;
                                     overflow: elide;

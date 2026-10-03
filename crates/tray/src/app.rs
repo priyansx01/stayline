@@ -35,7 +35,7 @@ const NEW_CONNECTION_NAME: &str = "New connection";
 /// tray instead of opening the window.
 const BACKGROUND_ARG: &str = "--background";
 /// App ID of the Start-menu shortcut the installer creates; notifications
-/// shown under it say "stayline".
+/// shown under it say "Stayline VPN".
 const APP_ID: &str = "Stayline.App";
 
 thread_local! {
@@ -188,13 +188,13 @@ struct App {
 impl App {
     fn new() -> anyhow::Result<Self> {
         let items = Items {
-            status: MenuItem::with_id("status", "stayline: starting", false, None),
+            status: MenuItem::with_id("status", "Stayline VPN: starting", false, None),
             connect: MenuItem::with_id("connect", "Connect", false, None),
             disconnect: MenuItem::with_id("disconnect", "Disconnect", false, None),
         };
         let menu = Menu::new();
         menu.append_items(&[
-            &MenuItem::with_id("open", "Open stayline", true, None),
+            &MenuItem::with_id("open", "Open Stayline VPN", true, None),
             &PredefinedMenuItem::separator(),
             &items.status,
             &items.connect,
@@ -206,7 +206,7 @@ impl App {
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
             .with_icon(icons::tray_icon(Light::Off))
-            .with_tooltip("stayline")
+            .with_tooltip("Stayline VPN")
             .build()?;
         Ok(Self {
             tray,
@@ -263,7 +263,7 @@ impl App {
                             if !app.service_up && !app.service_warned {
                                 app.service_warned = true;
                                 toast(
-                                    "The stayline service is not running. Reinstall stayline or ask IT.",
+                                    "The Stayline VPN service is not running. Reinstall Stayline VPN or ask IT.",
                                 );
                             }
                         })
@@ -354,7 +354,7 @@ impl App {
             }
             Attention::CertificateChanged { expected, actual } => {
                 toast(
-                    "The VPN gateway's certificate has changed. stayline will not connect; contact IT.",
+                    "The VPN gateway's certificate has changed. Stayline VPN will not connect; contact IT.",
                 );
                 self.trust = Some(TrustPrompt {
                     connection: name.unwrap_or_default(),
@@ -512,6 +512,9 @@ impl App {
                 .any(|m| m.name == c.name && m.realm.is_some());
         w.set_conn_name(c.name.clone().into());
         w.set_gateway(c.gateway.clone().into());
+        let (host, port) = stayline_config::split_gateway(&c.gateway);
+        w.set_gateway_host(host.into());
+        w.set_gateway_port(port.into());
         w.set_username(c.username.clone().into());
         w.set_realm(c.realm.clone().unwrap_or_default().into());
         w.set_pin(c.pin.clone().unwrap_or_default().into());
@@ -549,7 +552,12 @@ impl App {
             }
             (String::new(), None)
         } else {
-            match stayline_config::validate(&w.get_gateway(), &w.get_username(), &w.get_pin()) {
+            let checked =
+                stayline_config::join_gateway(&w.get_gateway_host(), &w.get_gateway_port())
+                    .and_then(|gateway| {
+                        stayline_config::validate(&gateway, &w.get_username(), &w.get_pin())
+                    });
+            match checked {
                 Ok(valid) => valid,
                 Err(message) => {
                     self.set_form_message(&message, true);
@@ -641,12 +649,19 @@ impl App {
 
     fn check_certificate(&mut self) {
         let Some(w) = &self.window else { return };
-        let gateway = w.get_gateway().trim().to_owned();
-        if gateway.is_empty() {
-            return;
-        }
+        let gateway = if w.get_conn_managed() {
+            w.get_gateway().trim().to_owned()
+        } else {
+            match stayline_config::join_gateway(&w.get_gateway_host(), &w.get_gateway_port()) {
+                Ok(gateway) => gateway,
+                Err(message) => {
+                    w.set_cert_result(message.into());
+                    return;
+                }
+            }
+        };
         if !self.service_up {
-            w.set_cert_result("The stayline service is not running.".into());
+            w.set_cert_result("The Stayline VPN service is not running.".into());
             return;
         }
         self.cert_checking = true;
@@ -860,7 +875,7 @@ impl App {
     fn refresh(&self) {
         let (light, text) = self.describe();
         let _ = self.tray.set_icon(Some(icons::tray_icon(light)));
-        let tooltip: String = format!("stayline: {text}").chars().take(120).collect();
+        let tooltip: String = format!("Stayline VPN: {text}").chars().take(120).collect();
         let _ = self.tray.set_tooltip(Some(tooltip));
         self.items.status.set_text(format!("Status: {text}"));
         let active = load_config().active().map(|c| c.name);
@@ -979,7 +994,7 @@ impl App {
 
     fn detail(&self) -> String {
         if !self.service_up {
-            return "The stayline service is not running, so the VPN cannot connect.".into();
+            return "The Stayline VPN service is not running, so the VPN cannot connect.".into();
         }
         match &self.state {
             TunnelState::Disconnected => "The VPN is off.".into(),
@@ -996,7 +1011,8 @@ impl App {
                 "{last_error}. Trying again in {retry_in_secs} s, or as soon as the network changes."
             ),
             TunnelState::WaitingForNetwork => {
-                "No network connection. stayline reconnects as soon as you are back online.".into()
+                "No network connection. Stayline VPN reconnects as soon as you are back online."
+                    .into()
             }
             TunnelState::NeedsUser { reason, .. } => capitalise(reason),
         }
@@ -1033,7 +1049,7 @@ fn toast(text: &str) {
     } else {
         Toast::POWERSHELL_APP_ID
     };
-    if let Err(e) = Toast::new(app_id).title("stayline").text1(text).show() {
+    if let Err(e) = Toast::new(app_id).title("Stayline VPN").text1(text).show() {
         tracing::warn!(error = %e, "could not show notification");
     }
 }

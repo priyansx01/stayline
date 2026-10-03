@@ -19,9 +19,9 @@ use windows_service::{define_windows_service, service_dispatcher};
 use crate::controller::Controller;
 
 pub const SERVICE_NAME: &str = "stayline";
-const DISPLAY_NAME: &str = "stayline VPN";
+const DISPLAY_NAME: &str = "Stayline VPN";
 const DESCRIPTION: &str =
-    "Keeps the stayline VPN tunnel connected and reconnects it after network changes and sleep.";
+    "Keeps the Stayline VPN tunnel connected and reconnects it after network changes and sleep.";
 
 define_windows_service!(ffi_service_main, service_main);
 

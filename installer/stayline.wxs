@@ -12,14 +12,14 @@
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
 
-  <Package Name="stayline"
-           Manufacturer="stayline"
+  <Package Name="Stayline VPN"
+           Manufacturer="Stayline VPN"
            Version="$(var.Version)"
            UpgradeCode="6f1c2a4e-8d3b-4f7a-9c5e-2b8d4a6e1f30"
            Scope="perMachine"
            Compressed="yes">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of stayline is already installed." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Stayline VPN is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="stayline.ico" SourceFile="$(var.Root)\assets\stayline.ico" />
@@ -46,7 +46,7 @@
     <Property Id="USERCONNECTIONS" Value="$(var.UserConnections)" Secure="yes" />
     <Property Id="TRUSTPROMPT" Value="$(var.TrustPrompt)" Secure="yes" />
 
-    <Feature Id="Main" Title="stayline">
+    <Feature Id="Main" Title="Stayline VPN">
       <ComponentGroupRef Id="Program" />
       <ComponentRef Id="StartMenu" />
     </Feature>
@@ -75,7 +75,7 @@
                            RebootPrompt="no" TerminateProcess="0" Timeout="5" />
 
     <!-- Welcome, progress, finish with "Start stayline now"; no licence page. -->
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Start stayline now" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Start Stayline VPN now" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
     <CustomAction Id="LaunchStayline" FileRef="tray" ExeCommand="" Return="asyncNoWait" />
     <UI Id="StaylineUI">
@@ -104,14 +104,14 @@
 
   <Fragment>
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="stayline" />
+      <Directory Id="INSTALLFOLDER" Name="Stayline VPN" />
     </StandardDirectory>
 
     <ComponentGroup Id="Program" Directory="INSTALLFOLDER">
       <Component Id="Service">
         <File Id="svc" Source="$(var.Bin)\stayline-svc.exe" KeyPath="yes" />
-        <ServiceInstall Id="ServiceInstall" Name="stayline" DisplayName="stayline VPN"
-                        Description="Keeps the stayline VPN tunnel connected and reconnects it after network changes and sleep."
+        <ServiceInstall Id="ServiceInstall" Name="stayline" DisplayName="Stayline VPN"
+                        Description="Keeps the Stayline VPN tunnel connected and reconnects it after network changes and sleep."
                         Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Vital="yes">
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
                               ThirdFailureActionType="restart" RestartServiceDelayInSeconds="5"
@@ -137,8 +137,8 @@
 
     <StandardDirectory Id="ProgramMenuFolder">
       <Component Id="StartMenu">
-        <!-- The app ID makes notifications appear as "stayline". -->
-        <Shortcut Id="StartMenuShortcut" Name="stayline" Description="FortiGate SSL-VPN that stays connected"
+        <!-- The app ID makes notifications appear as "Stayline VPN". -->
+        <Shortcut Id="StartMenuShortcut" Name="Stayline VPN" Description="FortiGate SSL-VPN that stays connected"
                   Target="[#tray]" WorkingDirectory="INSTALLFOLDER" Icon="stayline.ico">
           <ShortcutProperty Key="System.AppUserModel.ID" Value="Stayline.App" />
         </Shortcut>

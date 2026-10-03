@@ -279,6 +279,60 @@ pub fn validate(
     Ok((gateway.to_owned(), normalize_pin(pin)?))
 }
 
+/// Port FortiGate SSL-VPN uses unless configured otherwise.
+pub const DEFAULT_PORT: u16 = 443;
+
+/// Splits a stored gateway (`host`, `host:port`, `https://host:port/...`,
+/// `[v6]:port`) into the address and port shown in separate fields.
+pub fn split_gateway(gateway: &str) -> (String, String) {
+    let rest = gateway.trim();
+    let rest = rest
+        .strip_prefix("https://")
+        .or_else(|| rest.strip_prefix("HTTPS://"))
+        .unwrap_or(rest);
+    let rest = rest.split('/').next().unwrap_or("");
+    if let Some((host, after)) = rest.strip_prefix('[').and_then(|v6| v6.split_once(']')) {
+        let port = after.strip_prefix(':').unwrap_or("");
+        return (host.to_owned(), port.to_owned());
+    }
+    match rest.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') => (host.to_owned(), port.to_owned()),
+        _ => (rest.to_owned(), String::new()),
+    }
+}
+
+/// Joins the address and port fields into the stored `host:port` form.
+/// An empty port means [`DEFAULT_PORT`].
+pub fn join_gateway(host: &str, port: &str) -> Result<String, String> {
+    let host = host
+        .trim()
+        .trim_start_matches("https://")
+        .trim_end_matches('/');
+    if host.is_empty() {
+        return Err("Enter the gateway address.".into());
+    }
+    if host.contains("://") || host.contains('/') || host.chars().any(char::is_whitespace) {
+        return Err(
+            "Enter only the gateway's name or IP address, without https:// or a path.".into(),
+        );
+    }
+    let port = port.trim();
+    let port: u16 = if port.is_empty() {
+        DEFAULT_PORT
+    } else {
+        port.parse()
+            .ok()
+            .filter(|p| *p > 0)
+            .ok_or("The port must be a number from 1 to 65535.")?
+    };
+    let host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    };
+    Ok(format!("{host}:{port}"))
+}
+
 /// Lower-case hex without separators, or `None` if empty.
 pub fn normalize_pin(pin: &str) -> Result<Option<String>, String> {
     let pin: String = pin
@@ -451,6 +505,56 @@ mod tests {
         assert_eq!(gw, "203.0.113.10:10443");
         assert_eq!(p, Some("ab".repeat(32)));
         assert_eq!(validate("vpn.example.com", "a", "").unwrap().1, None);
+    }
+
+    #[test]
+    fn gateway_splits_into_address_and_port() {
+        assert_eq!(
+            split_gateway("vpn.example.com:10443"),
+            ("vpn.example.com".into(), "10443".into())
+        );
+        assert_eq!(
+            split_gateway("203.0.113.10"),
+            ("203.0.113.10".into(), String::new())
+        );
+        assert_eq!(
+            split_gateway("https://vpn.example.com:8443/remote/login"),
+            ("vpn.example.com".into(), "8443".into())
+        );
+        assert_eq!(
+            split_gateway("[2001:db8::1]:443"),
+            ("2001:db8::1".into(), "443".into())
+        );
+        assert_eq!(split_gateway(""), (String::new(), String::new()));
+    }
+
+    #[test]
+    fn gateway_joins_with_default_port_and_checks_input() {
+        assert_eq!(
+            join_gateway(" vpn.example.com ", "10443").unwrap(),
+            "vpn.example.com:10443"
+        );
+        assert_eq!(
+            join_gateway("203.0.113.10", "").unwrap(),
+            "203.0.113.10:443"
+        );
+        assert_eq!(
+            join_gateway("2001:db8::1", "443").unwrap(),
+            "[2001:db8::1]:443"
+        );
+        assert!(join_gateway("", "443").is_err());
+        assert!(join_gateway("vpn.example.com", "70000").is_err());
+        assert!(join_gateway("vpn.example.com", "abc").is_err());
+        assert!(join_gateway("vpn.example.com", "0").is_err());
+        assert!(join_gateway("http://vpn.example.com", "").is_err());
+        for stored in [
+            "vpn.example.com:10443",
+            "203.0.113.10:443",
+            "[2001:db8::1]:443",
+        ] {
+            let (host, port) = split_gateway(stored);
+            assert_eq!(join_gateway(&host, &port).unwrap(), stored);
+        }
     }
 
     #[test]
