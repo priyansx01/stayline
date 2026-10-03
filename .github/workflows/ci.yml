@@ -20,7 +20,7 @@ jobs:
     name: Format, lint and test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Installs the toolchain pinned in rust-toolchain.toml (with rustfmt and clippy).
       - name: Install Rust
