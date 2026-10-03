@@ -56,6 +56,7 @@ pub fn tray_icon(light: Light) -> Icon {
     Icon::from_rgba(rgba(light), SIZE, SIZE).expect("icon dimensions match buffer")
 }
 
+#[allow(dead_code)]
 pub fn window_icon(light: Light) -> slint::Image {
     let buffer =
         slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&rgba(light), SIZE, SIZE);

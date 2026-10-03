@@ -119,14 +119,13 @@ component InfoBanner inherits Rectangle {
 
 export component AppWindow inherits Window {
     title: "stayline";
-    icon: app-icon;
+    icon: @image-url("icons/stayline-emblem.png");
     background: MaterialPalette.surface;
     min-width: 680px;
     min-height: 600px;
     preferred-width: 768px;
     preferred-height: 780px;
 
-    in property <image> app-icon;
     in property <string> version;
 
     // Appearance / Theme
@@ -241,9 +240,10 @@ export component AppWindow inherits Window {
                     alignment: start;
 
                     Image {
-                        source: root.app-icon;
+                        source: @image-url("icons/stayline-emblem.png");
                         width: 22px;
                         height: 22px;
+                        image-fit: contain;
                         vertical-alignment: center;
                     }
 
@@ -893,12 +893,31 @@ export component AppWindow inherits Window {
                         // About Banner Card
                         ElevatedCard {
                             VerticalLayout {
-                                padding: 20px;
+                                padding: 22px;
                                 spacing: 14px;
 
                                 HorizontalLayout {
-                                    spacing: 16px;
-                                    alignment: space-between;
+                                    spacing: 20px;
+                                    alignment: start;
+
+                                    // Brand Emblem in Apple-style Glassmorphic Container
+                                    Rectangle {
+                                        width: 104px;
+                                        height: 104px;
+                                        border-radius: 20px;
+                                        background: MaterialPalette.surface_container_high;
+                                        border-width: 1px;
+                                        border-color: MaterialPalette.outline_variant;
+
+                                        Image {
+                                            width: 84px;
+                                            height: 84px;
+                                            source: @image-url("icons/stayline-emblem.png");
+                                            image-fit: contain;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+                                    }
 
                                     VerticalLayout {
                                         spacing: 6px;
@@ -930,11 +949,6 @@ export component AppWindow inherits Window {
                                             color: MaterialPalette.on_surface_variant;
                                             wrap: word-wrap;
                                         }
-                                    }
-
-                                    AboutSlint {
-                                        width: 180px;
-                                        height: 100px;
                                     }
                                 }
                             }
@@ -1047,6 +1061,40 @@ export component AppWindow inherits Window {
                                             }
                                         }
                                     }
+                                }
+                            }
+                        }
+
+                        // GUI Framework Attribution
+                        OutlinedCard {
+                            HorizontalLayout {
+                                padding-left: 18px;
+                                padding-right: 18px;
+                                padding-top: 12px;
+                                padding-bottom: 12px;
+                                spacing: 16px;
+                                alignment: space-between;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 2px;
+
+                                    Text {
+                                        text: "Built with Slint GUI";
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        color: MaterialPalette.on_surface;
+                                    }
+                                    Text {
+                                        text: "Native, high-performance, and lightweight GUI toolkit for Rust.";
+                                        font-size: 11px;
+                                        color: MaterialPalette.on_surface_variant;
+                                    }
+                                }
+
+                                AboutSlint {
+                                    width: 140px;
+                                    height: 44px;
                                 }
                             }
                         }

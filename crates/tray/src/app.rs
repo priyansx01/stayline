@@ -884,7 +884,6 @@ impl App {
         }
         let active = config.active();
         let (light, title) = self.describe();
-        w.set_app_icon(icons::window_icon(light));
         w.set_state_kind(light.kind());
         w.set_state_title(title.into());
         w.set_state_detail(self.detail().into());
