@@ -26,6 +26,10 @@
     <Property Id="ARPPRODUCTICON" Value="stayline.ico" />
     <Property Id="ARPNOMODIFY" Value="1" />
 
+    <!-- Stayline VPN artwork instead of the stock WiX images. -->
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.Root)\assets\installer-dialog.bmp" />
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.Root)\assets\installer-banner.bmp" />
+
     <!-- Company connection. Empty GATEWAY means none is set up. -->
     <Property Id="CONNECTIONNAME" Value="$(var.ConnectionName)" Secure="yes" />
     <?if $(var.Gateway) != "" ?>

@@ -7,18 +7,21 @@ writes every logo asset, so the mark stays crisp at any size:
 - assets/stayline.ico                    app/installer icon, 16 to 256 px
 - crates/tray/ui/icons/stayline-logo.svg    in-app logo (drawn at the size shown)
 - crates/tray/ui/icons/stayline-icon-32.png  window/taskbar icon
+- assets/installer-dialog.bmp            installer welcome/finish artwork
+- assets/installer-banner.bmp            installer top banner
 
     python scripts/make-logo.py
 """
 
 import os
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BLUE = (30, 99, 180)
 TEAL = (31, 154, 160)
 WHITE = (255, 255, 255)
+NAVY = (31, 35, 64)  # the app's sidebar
 N = 1024  # design grid; everything below is in these units
 
 
@@ -137,6 +140,36 @@ def svg() -> str:
 """
 
 
+def font(size):
+    for name in ("segoeuib.ttf", "arialbd.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            pass
+    return ImageFont.load_default(size)
+
+
+def installer_art(at):
+    """WiX UI bitmaps: the dialog image fills the welcome and finish pages
+    (text is drawn right of x=164), the banner tops the other pages."""
+    dialog = Image.new("RGB", (493, 312), WHITE)
+    d = ImageDraw.Draw(dialog)
+    d.rectangle((0, 0, 163, 312), fill=NAVY)
+    logo = at(84)
+    dialog.paste(logo, ((164 - 84) // 2, 86), logo)
+    f = font(17)
+    text = "Stayline VPN"
+    w = d.textlength(text, font=f)
+    d.text(((164 - w) / 2, 186), text, font=f, fill=WHITE)
+
+    banner = Image.new("RGB", (493, 58), WHITE)
+    small = at(40)
+    banner.paste(small, (493 - 40 - 12, 9), small)
+
+    dialog.save(os.path.join(ROOT, "assets", "installer-dialog.bmp"))
+    banner.save(os.path.join(ROOT, "assets", "installer-banner.bmp"))
+
+
 def main():
     master = draw(scale=2).resize((N, N), Image.Resampling.LANCZOS)
 
@@ -159,7 +192,8 @@ def main():
         sizes=[(s, s) for s in sizes],
         append_images=images[:-1],
     )
-    print("wrote the SVG master, 512 px PNG, application icon and in-app logo files")
+    installer_art(at)
+    print("wrote the SVG master, 512 px PNG, application icon, in-app logo and installer artwork")
 
 
 if __name__ == "__main__":
