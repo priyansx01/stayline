@@ -80,6 +80,9 @@ fn run_service() -> Result<()> {
         Duration::ZERO,
     )?;
     tracing::info!("service running");
+    if let Err(e) = allow_users_to_start() {
+        tracing::warn!(error = %e, "could not let users start the service");
+    }
 
     let result = crate::run(controller, stop_rx);
 
@@ -159,4 +162,49 @@ pub fn uninstall() -> Result<()> {
     service.delete()?;
     println!("removed the '{SERVICE_NAME}' service");
     Ok(())
+}
+
+/// Lets interactively signed-in users start (and query) the service, so the
+/// app can start it again if it was stopped. Nothing else is granted.
+fn allow_users_to_start() -> windows::core::Result<()> {
+    use windows::Win32::Foundation::{HLOCAL, LocalFree};
+    use windows::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+    use windows::Win32::System::Services::{
+        CloseServiceHandle, OpenSCManagerW, OpenServiceW, SC_MANAGER_CONNECT, SERVICE_ALL_ACCESS,
+        SetServiceObjectSecurity,
+    };
+    use windows::core::{HSTRING, w};
+
+    // The default service DACL, with SERVICE_START (RP) added for
+    // interactive users (IU).
+    const SDDL: &str = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)";
+
+    // SAFETY: handles and the descriptor are released before returning.
+    unsafe {
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            &HSTRING::from(SDDL),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            None,
+        )?;
+        let result = (|| {
+            let manager = OpenSCManagerW(None, None, SC_MANAGER_CONNECT)?;
+            let service = OpenServiceW(manager, w!("stayline"), SERVICE_ALL_ACCESS);
+            let set = service
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|s| SetServiceObjectSecurity(*s, DACL_SECURITY_INFORMATION, descriptor));
+            if let Ok(service) = service {
+                let _ = CloseServiceHandle(service);
+            }
+            let _ = CloseServiceHandle(manager);
+            set
+        })();
+        let _ = LocalFree(Some(HLOCAL(descriptor.0)));
+        result
+    }
 }

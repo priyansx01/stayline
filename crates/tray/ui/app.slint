@@ -154,6 +154,7 @@ component Field inherits VerticalLayout {
     in property <bool> read-only;
     in property <bool> mono;
     callback edited(string);
+    callback accepted(string);
 
     property <bool> reveal;
     spacing: 4px;
@@ -186,6 +187,9 @@ component Field inherits VerticalLayout {
                 input-type: root.password && !root.reveal ? InputType.password : InputType.text;
                 edited => {
                     root.edited(self.text);
+                }
+                accepted => {
+                    root.accepted(self.text);
                 }
             }
 
@@ -604,6 +608,14 @@ export component AppWindow inherits Window {
     in-out property <bool> password-visible;
     in-out property <bool> confirm-delete-open;
 
+    // Sign-in prompt shown when connecting without a saved password
+    in-out property <bool> password-prompt-open;
+    in property <string> prompt-title;
+    in property <string> prompt-detail;
+    in-out property <string> prompt-password;
+    in-out property <bool> prompt-remember: true;
+    in property <string> prompt-error;
+
     // Certificate check
     in property <bool> cert-checking;
     in property <string> cert-result;
@@ -639,6 +651,8 @@ export component AppWindow inherits Window {
     callback open-logs();
     callback open-notices();
     callback filter-components(string);
+    callback prompt-connect();
+    callback prompt-cancel();
 
     property <bool> service-running: root.service-status == "Running";
 
@@ -735,7 +749,7 @@ export component AppWindow inherits Window {
                         }
                     }
                     Text {
-                        text: root.service-running ? "Service running" : "Service not running";
+                        text: root.service-running ? "Service running" : root.service-status == "Not installed" ? "Service not installed" : root.service-status == "Starting" ? "Starting service…" : "Service not running";
                         font-size: 11px;
                         color: Theme.sidebar-text;
                         vertical-alignment: center;
@@ -1305,9 +1319,9 @@ export component AppWindow inherits Window {
                         padding-bottom: 4px;
                         SettingRow {
                             title: "Background service";
-                            description: root.service-running ? "Running. The VPN stays up even when this window is closed." : "Not running, so the VPN cannot connect. Reinstall Stayline VPN or contact IT.";
+                            description: root.service-running ? "Running. The VPN stays up even when this window is closed." : root.service-status == "Not installed" ? "Not installed. Reinstall Stayline VPN or contact IT." : root.service-status == "Starting" ? "Starting…" : "Not running, so the VPN cannot connect. Restart the computer or contact IT.";
                             Chip {
-                                text: root.service-running ? "Running" : "Not running";
+                                text: root.service-status;
                                 dot: root.service-running ? Theme.success : Theme.danger;
                             }
                         }
@@ -1543,6 +1557,83 @@ export component AppWindow inherits Window {
                         kind: 2;
                         clicked => {
                             root.remove-connection();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sign-in prompt
+    if root.password-prompt-open: Rectangle {
+        background: #0000007a;
+        TouchArea { }
+
+        Panel {
+            width: 360px;
+            height: prompt.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+
+            prompt := VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+                VerticalLayout {
+                    spacing: 3px;
+                    Text {
+                        text: root.prompt-title;
+                        font-size: 14px;
+                        font-weight: 600;
+                        color: Theme.text;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: root.prompt-detail;
+                        font-size: 11px;
+                        color: Theme.muted;
+                        overflow: elide;
+                    }
+                }
+                if root.prompt-error != "": Banner {
+                    text: root.prompt-error;
+                }
+                Field {
+                    label: "Password";
+                    text <=> root.prompt-password;
+                    password: true;
+                    accepted => {
+                        root.prompt-connect();
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    Text {
+                        text: "Save password for this Windows account";
+                        font-size: 12px;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Toggle {
+                        checked <=> root.prompt-remember;
+                    }
+                }
+                HorizontalLayout {
+                    padding-top: 4px;
+                    spacing: 8px;
+                    alignment: end;
+                    Button {
+                        text: "Cancel";
+                        kind: 1;
+                        clicked => {
+                            root.prompt-cancel();
+                        }
+                    }
+                    Button {
+                        text: "Connect";
+                        enabled: root.prompt-password != "";
+                        clicked => {
+                            root.prompt-connect();
                         }
                     }
                 }

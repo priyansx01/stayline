@@ -11,6 +11,8 @@ mod icons;
 #[cfg(windows)]
 mod instance;
 #[cfg(windows)]
+mod service_ctl;
+#[cfg(windows)]
 mod theme;
 
 fn main() {

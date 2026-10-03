@@ -8,7 +8,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use slint::{
     ComponentHandle, ModelRc, SharedString, StandardListViewItem, Timer, TimerMode, VecModel,
@@ -23,6 +23,7 @@ use zeroize::Zeroizing;
 
 use crate::client::{self, FromService};
 use crate::icons::{self, Light};
+use crate::service_ctl::{self, StartError};
 use crate::{format, instance, theme};
 
 slint::include_modules!();
@@ -171,6 +172,11 @@ struct App {
     /// whether a restarted service lost the tunnel.
     resync_on_status: bool,
     service_warned: bool,
+    /// Why the service could not be started from the app, if it could not.
+    service_problem: Option<StartError>,
+    last_start_attempt: Option<Instant>,
+    /// Connection waiting for a password typed into the sign-in prompt.
+    prompt: Option<String>,
     last_alert: Option<String>,
     /// Connection of the last connect request.
     connecting: Option<String>,
@@ -219,6 +225,9 @@ impl App {
             wants_connected: false,
             resync_on_status: false,
             service_warned: false,
+            service_problem: None,
+            last_start_attempt: None,
+            prompt: None,
             last_alert: None,
             connecting: None,
             session_passwords: HashMap::new(),
@@ -250,11 +259,13 @@ impl App {
         match message {
             FromService::Available => {
                 self.service_up = true;
+                self.service_problem = None;
                 self.resync_on_status = true;
             }
             FromService::Unavailable => {
                 self.service_up = false;
                 self.cert_checking = false;
+                self.try_start_service();
                 // Only warn if it stays unreachable, so a service restart
                 // does not produce a notification.
                 if !self.service_warned {
@@ -262,9 +273,7 @@ impl App {
                         with_app(|app| {
                             if !app.service_up && !app.service_warned {
                                 app.service_warned = true;
-                                toast(
-                                    "The Stayline VPN service is not running. Reinstall Stayline VPN or ask IT.",
-                                );
+                                toast(&app.detail());
                             }
                         })
                     });
@@ -352,6 +361,14 @@ impl App {
                 });
                 self.show_window(Some(TAB_STATUS));
             }
+            Attention::Credentials if connection.is_some() => {
+                toast("The password was rejected. Enter it again to connect.");
+                let connection = connection.expect("checked above");
+                self.ask_password(
+                    &connection,
+                    Some("The gateway rejected the password. Try again."),
+                );
+            }
             Attention::CertificateChanged { expected, actual } => {
                 toast(
                     "The VPN gateway's certificate has changed. Stayline VPN will not connect; contact IT.",
@@ -433,9 +450,7 @@ impl App {
             }
         };
         let Some(password) = password else {
-            self.show_window(Some(TAB_CONNECTIONS));
-            self.edit_connection(Some(&connection.name));
-            self.set_form_message("Enter your password, then choose Save and connect.", true);
+            self.ask_password(&connection, None);
             return;
         };
         self.last_alert = None;
@@ -451,6 +466,79 @@ impl App {
     fn disconnect(&mut self) {
         self.wants_connected = false;
         self.send(Request::Disconnect);
+    }
+
+    /// Opens the sign-in prompt for a connection that has no password yet
+    /// (or whose password was rejected).
+    fn ask_password(&mut self, connection: &Connection, error: Option<&str>) {
+        self.prompt = Some(connection.name.clone());
+        self.show_window(Some(TAB_STATUS));
+        let Some(w) = &self.window else { return };
+        w.set_prompt_title(format!("Sign in to {}", connection.name).into());
+        w.set_prompt_detail(format!("{} on {}", connection.username, connection.gateway).into());
+        w.set_prompt_password("".into());
+        w.set_prompt_remember(true);
+        w.set_prompt_error(error.unwrap_or_default().into());
+        w.set_password_prompt_open(true);
+    }
+
+    fn prompt_connect(&mut self) {
+        let Some(w) = &self.window else { return };
+        let Some(name) = self.prompt.clone() else {
+            w.set_password_prompt_open(false);
+            return;
+        };
+        let password = Zeroizing::new(w.get_prompt_password().to_string());
+        if password.is_empty() {
+            w.set_prompt_error("Enter your password.".into());
+            return;
+        }
+        if w.get_prompt_remember() {
+            if let Err(e) = secret::save(&name, &password) {
+                w.set_prompt_error(e.to_string().into());
+                return;
+            }
+            self.session_passwords.remove(&name);
+        } else {
+            let _ = secret::forget(&name);
+            self.session_passwords.insert(name.clone(), password);
+        }
+        w.set_prompt_password("".into());
+        w.set_password_prompt_open(false);
+        self.prompt = None;
+        let mut config = load_config();
+        config.set_active(&name);
+        let _ = config.user.save();
+        self.connect();
+    }
+
+    fn prompt_cancel(&mut self) {
+        self.prompt = None;
+        if let Some(w) = &self.window {
+            w.set_prompt_password("".into());
+            w.set_password_prompt_open(false);
+        }
+    }
+
+    /// Starts the service if it is installed but stopped (at most every 20 s).
+    fn try_start_service(&mut self) {
+        if self
+            .last_start_attempt
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(20))
+        {
+            return;
+        }
+        self.last_start_attempt = Some(Instant::now());
+        match service_ctl::start() {
+            Ok(()) => {
+                tracing::info!("asked Windows to start the service");
+                self.service_problem = None;
+            }
+            Err(problem) => {
+                tracing::warn!(?problem, "could not start the service");
+                self.service_problem = Some(problem);
+            }
+        }
     }
 
     fn choose_active(&mut self, index: i32) {
@@ -820,6 +908,8 @@ impl App {
             })
         });
         w.on_open_logs(open_logs);
+        w.on_prompt_connect(|| with_app(|app| app.prompt_connect()));
+        w.on_prompt_cancel(|| with_app(|app| app.prompt_cancel()));
         w.on_open_notices(open_notices);
         w.on_filter_components(|query| {
             with_app(move |app| {
@@ -920,14 +1010,7 @@ impl App {
         if w.get_active_index() != index {
             w.set_active_index(index);
         }
-        w.set_service_status(
-            if self.service_up {
-                "Running"
-            } else {
-                "Not running"
-            }
-            .into(),
-        );
+        w.set_service_status(self.service_label().into());
 
         match &self.trust {
             Some(prompt) => {
@@ -978,9 +1061,23 @@ impl App {
             )
     }
 
+    /// Short service state for the sidebar and Settings.
+    fn service_label(&self) -> &'static str {
+        match (self.service_up, self.service_problem) {
+            (true, _) => "Running",
+            (false, Some(StartError::NotInstalled)) => "Not installed",
+            (false, None) if self.last_start_attempt.is_some() => "Starting",
+            _ => "Not running",
+        }
+    }
+
     fn describe(&self) -> (Light, String) {
         if !self.service_up {
-            return (Light::Alert, "Service not running".into());
+            return match self.service_label() {
+                "Not installed" => (Light::Alert, "Service not installed".into()),
+                "Starting" => (Light::Busy, "Starting service…".into()),
+                _ => (Light::Alert, "Service not running".into()),
+            };
         }
         match &self.state {
             TunnelState::Disconnected => (Light::Off, "Disconnected".into()),
@@ -994,7 +1091,18 @@ impl App {
 
     fn detail(&self) -> String {
         if !self.service_up {
-            return "The Stayline VPN service is not running, so the VPN cannot connect.".into();
+            return match self.service_problem {
+                Some(StartError::NotInstalled) => {
+                    "The Stayline VPN service is not installed. Reinstall Stayline VPN or contact IT.".into()
+                }
+                Some(StartError::AccessDenied) => {
+                    "The Stayline VPN service is stopped and this account cannot start it. Restart the computer or contact IT.".into()
+                }
+                Some(StartError::Failed(code)) => {
+                    format!("The Stayline VPN service could not be started (error {code}). Restart the computer or contact IT.")
+                }
+                None => "Starting the Stayline VPN service…".into(),
+            };
         }
         match &self.state {
             TunnelState::Disconnected => "The VPN is off.".into(),
