@@ -72,15 +72,6 @@ component NavRow inherits Rectangle {
         }
     }
 
-    if root.active: Rectangle {
-        x: 0;
-        y: (parent.height - self.height) / 2;
-        width: 3px;
-        height: 16px;
-        border-radius: 2px;
-        background: Theme.accent;
-    }
-
     HorizontalLayout {
         padding-left: 14px;
         padding-right: 10px;
