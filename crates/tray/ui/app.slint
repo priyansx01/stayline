@@ -853,51 +853,6 @@ export component AppWindow inherits Window {
                             }
                         }
 
-                        if root.trust-mode == 1: Rectangle {
-                            border-radius: 10px;
-                            background: Theme.warning.with-alpha(0.10);
-                            VerticalLayout {
-                                padding: 12px;
-                                spacing: 8px;
-                                Text {
-                                    text: "First connection to " + root.trust-gateway;
-                                    font-size: 12px;
-                                    font-weight: 600;
-                                    color: Theme.text;
-                                }
-                                Text {
-                                    text: "The gateway's certificate is not issued by a public authority. Check that this fingerprint matches the one from your IT department; Stayline VPN will remember it and warn you if it changes.";
-                                    font-size: 11px;
-                                    color: Theme.muted;
-                                    wrap: word-wrap;
-                                }
-                                Text {
-                                    text: root.trust-fingerprint;
-                                    font-family: "Consolas";
-                                    font-size: 11px;
-                                    color: Theme.text;
-                                    wrap: word-wrap;
-                                }
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    alignment: end;
-                                    Button {
-                                        text: "Cancel";
-                                        kind: 1;
-                                        clicked => {
-                                            root.dismiss-trust();
-                                        }
-                                    }
-                                    Button {
-                                        text: "Trust and connect";
-                                        clicked => {
-                                            root.trust-and-connect();
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
                         if root.trust-mode == 2: Rectangle {
                             border-radius: 10px;
                             background: Theme.danger-soft;
@@ -1634,6 +1589,101 @@ export component AppWindow inherits Window {
                         enabled: root.prompt-password != "";
                         clicked => {
                             root.prompt-connect();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // First connection to a gateway whose certificate needs approval
+    if root.trust-mode == 1: Rectangle {
+        background: #0000007a;
+        TouchArea { }
+
+        Panel {
+            width: 440px;
+            height: trust.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+
+            trust := VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 18px;
+                        background: Theme.warning.with-alpha(0.15);
+                        Text {
+                            text: "!";
+                            font-size: 18px;
+                            font-weight: 700;
+                            color: Theme.warning;
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 3px;
+                        alignment: center;
+                        Text {
+                            text: "Trust this gateway?";
+                            font-size: 14px;
+                            font-weight: 600;
+                            color: Theme.text;
+                        }
+                        Text {
+                            text: "First connection to " + root.trust-gateway;
+                            font-size: 11px;
+                            color: Theme.muted;
+                            overflow: elide;
+                        }
+                    }
+                }
+                Text {
+                    text: "The gateway's certificate is not issued by a public authority. Check that this fingerprint matches the one from your IT department. Stayline VPN will remember it and warn you if it ever changes.";
+                    font-size: 12px;
+                    color: Theme.text;
+                    wrap: word-wrap;
+                }
+                VerticalLayout {
+                    spacing: 6px;
+                    Caption {
+                        text: "SHA-256 FINGERPRINT";
+                    }
+                    Rectangle {
+                        border-radius: 8px;
+                        background: Theme.page;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        VerticalLayout {
+                            padding: 10px;
+                            Text {
+                                text: root.trust-fingerprint;
+                                font-family: "Consolas";
+                                font-size: 11px;
+                                color: Theme.text;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    padding-top: 4px;
+                    spacing: 8px;
+                    alignment: end;
+                    Button {
+                        text: "Deny";
+                        kind: 1;
+                        clicked => {
+                            root.dismiss-trust();
+                        }
+                    }
+                    Button {
+                        text: "Trust and connect";
+                        clicked => {
+                            root.trust-and-connect();
                         }
                     }
                 }
