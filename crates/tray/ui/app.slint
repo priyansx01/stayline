@@ -755,11 +755,14 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                     }
                 }
-                Text {
-                    x: 8px;
-                    text: "Version " + root.version;
-                    font-size: 10px;
-                    color: Theme.sidebar-text.with-alpha(0.6);
+                // Lines up with the service text, past the dot (8 + 7 + 8).
+                HorizontalLayout {
+                    padding-left: 23px;
+                    Text {
+                        text: "Version " + root.version;
+                        font-size: 10px;
+                        color: Theme.sidebar-text.with-alpha(0.6);
+                    }
                 }
             }
         }
